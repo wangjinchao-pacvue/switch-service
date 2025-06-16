@@ -17,8 +17,7 @@ docker build -t $REPO:$TAG .
 echo "[INFO] 镜像构建完成: $REPO:$TAG"
 
 echo "[INFO] 登录 Docker Hub（如已登录可忽略提示）"
-docker login -u jinchao.wang@pacuve.com
-
+docker login -u jcwangdocker
 echo "[INFO] 推送镜像到仓库: $REPO:$TAG"
 docker push $REPO:$TAG
 

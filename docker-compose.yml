@@ -4,8 +4,8 @@ services:
   switch-service:
     build: .
     ports:
-      - "3000:3000"  # 后端API端口
-      - "5173:5173"  # 前端服务端口
+      - "3400:3400"  # 后端API端口
+      - "3456:3456"  # 前端服务端口
     environment:
       - NODE_ENV=production
     volumes:

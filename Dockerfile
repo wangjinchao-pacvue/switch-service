@@ -56,11 +56,11 @@ RUN chown -R nextjs:nodejs /app
 USER nextjs
 
 # 暴露端口
-EXPOSE 3000 5173
+EXPOSE 3400 3456 20000-30000
 
 # 健康检查
 HEALTHCHECK --interval=30s --timeout=3s --start-period=5s --retries=3 \
-  CMD wget --no-verbose --tries=1 --spider http://localhost:3000/api/config || exit 1
+  CMD wget --no-verbose --tries=1 --spider http://localhost:3400/api/config || exit 1
 
 # 启动命令
 CMD ["pm2-runtime", "ecosystem.config.js"] 

@@ -1,0 +1,25 @@
+version: '3.8'
+
+services:
+  switch-service:
+    build: .
+    ports:
+      - "3000:3000"  # 后端API端口
+      - "5173:5173"  # 前端服务端口
+    environment:
+      - NODE_ENV=production
+    volumes:
+      - ./data:/app/data  # 持久化数据（如果需要）
+    restart: unless-stopped
+    container_name: switch-service
+
+  # 可选：如果你想在同一个Docker网络中运行Eureka用于测试
+  eureka-server:
+    image: steeltoeoss/eureka-server:latest
+    ports:
+      - "8761:8761"
+    environment:
+      - EUREKA_CLIENT_REGISTER_WITH_EUREKA=false
+      - EUREKA_CLIENT_FETCH_REGISTRY=false
+    restart: unless-stopped
+    container_name: eureka-server 

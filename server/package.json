@@ -1,0 +1,23 @@
+{
+  "name": "switch-service-server",
+  "version": "1.0.0",
+  "description": "Backend server for switch-service",
+  "main": "index.js",
+  "scripts": {
+    "start": "node index.js",
+    "dev": "nodemon index.js"
+  },
+  "dependencies": {
+    "express": "^4.18.2",
+    "cors": "^2.8.5",
+    "axios": "^1.6.2",
+    "http-proxy-middleware": "^2.0.6",
+    "eureka-js-client": "^4.5.0",
+    "ws": "^8.14.2",
+    "sqlite3": "^5.1.6",
+    "uuid": "^9.0.1"
+  },
+  "devDependencies": {
+    "nodemon": "^3.0.2"
+  }
+} 

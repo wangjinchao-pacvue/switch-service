@@ -13,42 +13,100 @@
 
 ## Docker 安装
 
-### 1. 克隆项目
+### 方式一：使用预构建镜像（推荐）
 
 ```bash
-git clone <repository-url>
+# 直接运行预构建镜像
+docker run -d \
+  --name switch-service \
+  -p 3400:3400 \
+  -p 4000-4100:4000-4100 \
+  jcwangdocker/switch-service:1.0.0
+```
+
+### 方式二：使用 Docker Compose
+
+```bash
+# 克隆项目
+git clone https://github.com/wangjinchao-pacvue/switch-service.git
 cd switch-service-web
+
+# 启动服务（包含可选的Eureka服务器）
+docker-compose up -d
+
+# 仅启动Switch Service
+docker-compose up -d switch-service
 ```
 
-### 2. 构建Docker镜像
+### 方式三：本地构建
 
 ```bash
+# 1. 克隆项目
+git clone https://github.com/wangjinchao-pacvue/switch-service.git
+cd switch-service-web
+
+# 2. 使用构建脚本
+bash build_and_push.sh [tag] [repo]
+
+# 3. 或手动构建
 docker build -t switch-service-web .
-```
 
-### 3. 运行容器
-
-```bash
-# 基本运行（使用默认端口范围 4000-4100）
+# 4. 运行容器
 docker run -d \
   --name switch-service \
   -p 3400:3400 \
   -p 4000-4100:4000-4100 \
   switch-service-web
+```
 
-# 自定义端口范围
+### 高级配置
+
+#### 自定义端口范围
+```bash
 docker run -d \
   --name switch-service \
   -p 3400:3400 \
   -p 5000-5200:5000-5200 \
   -e PORT_RANGE_START=5000 \
   -e PORT_RANGE_END=5200 \
-  switch-service-web
+  jcwangdocker/switch-service:1.0.0
 ```
 
-### 4. 访问应用
+#### 数据持久化
+```bash
+docker run -d \
+  --name switch-service \
+  -p 3400:3400 \
+  -p 4000-4100:4000-4100 \
+  -v $(pwd)/data:/app/server/data \
+  jcwangdocker/switch-service:1.0.0
+```
+
+#### 查看容器日志
+```bash
+# 查看实时日志
+docker logs -f switch-service
+
+# 查看最近100行日志
+docker logs --tail 100 switch-service
+```
+
+### 访问应用
 
 打开浏览器访问：`http://localhost:3400`
+
+### 构建和推送镜像
+
+如果您需要构建自己的镜像版本：
+
+```bash
+# 使用提供的脚本（需要Docker Hub账号）
+bash build_and_push.sh 1.0.0 your-dockerhub-username/switch-service
+
+# 手动构建
+docker build -t your-repo/switch-service:tag .
+docker push your-repo/switch-service:tag
+```
 
 ## 环境变量配置
 

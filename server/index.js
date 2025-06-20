@@ -4,11 +4,12 @@ const axios = require('axios');
 const { createProxyMiddleware } = require('http-proxy-middleware');
 const WebSocket = require('ws');
 const http = require('http');
+const os = require('os');
 const database = require('./database');
 const processManager = require('./process-manager');
 const serviceEventManager = require('./serviceEventManager');
-const autoStartManager = require('./autoStartManager');
-const os = require('os');
+
+
 
 const app = express();
 const server = http.createServer(app);
@@ -27,35 +28,57 @@ let config = {
   }
 };
 
-let proxyServers = new Map(); // 存储运行中的代理服务器
-let heartbeatTimers = new Map(); // 存储Eureka心跳定时器
-let heartbeatErrors = new Map(); // 存储心跳错误信息 {serviceName:port -> errorInfo}
-let heartbeatHistory = new Map(); // 存储心跳历史数据 {serviceName:port -> [{timestamp, status, message}...]}
+let proxyServers = new Map(); // 存储运行中的代理服务器实例（仅运行时状态）
+let heartbeatTimers = new Map(); // 存储Eureka心跳定时器（仅运行时状态）
+let heartbeatErrors = new Map(); // 存储心跳错误信息（运行时状态，用于即时通知）
 let statusSyncTimer = null; // 状态同步定时器
-let proxyLogs = new Map(); // 存储代理服务日志 {serviceName: [logs...]}
-let logSubscribers = new Map(); // 存储日志订阅者 {serviceName: Set<ws>}
+let logSubscribers = new Map(); // 存储日志订阅者（WebSocket连接状态）
 let eurekaUnavailableCount = 0; // Eureka不可用计数器
 let isEurekaShutdownTriggered = false; // 是否已触发Eureka关闭
+let isEurekaMonitoringActive = false; // Eureka监听是否活跃
+let isEurekaAvailable = null; // Eureka服务可用性状态: null=未检查, true=可用, false=不可用
+let eurekaHealthCheckTimer = null; // Eureka健康检查定时器
+let eurekaUnavailableStartTime = null; // Eureka开始不可用的时间
 
 // 初始化数据库
 database.init().then(async () => {
   console.log('数据库初始化完成');
   
-  // 初始化自动启动管理器
-  await autoStartManager.init();
+  // 初始化端口范围配置
+  await initializePortRangeConfig();
   
-  // 启动时恢复运行中的代理服务
-  await restoreRunningServices();
-  
-  // 执行自动启动
+  // 加载Eureka配置
   try {
-    const autoStartResult = await autoStartManager.executeAutoStart(startProxyService);
-    if (autoStartResult) {
-      console.log(`Auto-start execution result:`, autoStartResult);
+    const savedEurekaConfig = await database.getEurekaConfig();
+    if (savedEurekaConfig) {
+      config.eureka = { ...config.eureka, ...savedEurekaConfig };
+      console.log('已加载Eureka配置:', config.eureka);
+    } else {
+      console.log('使用默认Eureka配置:', config.eureka);
     }
   } catch (error) {
-    console.error('Failed to execute auto-start:', error);
+    console.error('加载Eureka配置失败:', error);
   }
+  
+  // 检查Eureka服务可用性
+  const eurekaAvailable = await checkEurekaAvailability();
+  
+  // 如果Eureka不可用，关闭所有运行中的代理服务
+  if (!eurekaAvailable) {
+    console.log('🚨 Eureka服务不可用，开始关闭所有运行中的代理服务...');
+    await shutdownAllProxyServicesForEureka();
+  } else {
+    // Eureka可用时，恢复运行中的代理服务
+    await restoreRunningServices();
+  }
+  
+  console.log('🚀 服务初始化完成');
+  
+  // 启动定期清理任务
+  startDataCleanupTask();
+  
+  // 启动Eureka健康检查
+  startEurekaHealthCheck();
 }).catch(err => {
   console.error('数据库初始化失败:', err);
   process.exit(1);
@@ -65,10 +88,10 @@ database.init().then(async () => {
 wss.on('connection', (ws) => {
   console.log('WebSocket client connected');
   
-  ws.on('message', (message) => {
+  ws.on('message', async (message) => {
     try {
       const data = JSON.parse(message);
-      handleWebSocketMessage(ws, data);
+      await handleWebSocketMessage(ws, data);
     } catch (error) {
       console.error('WebSocket message parse error:', error);
     }
@@ -82,12 +105,12 @@ wss.on('connection', (ws) => {
 });
 
 // 处理WebSocket消息
-function handleWebSocketMessage(ws, data) {
+async function handleWebSocketMessage(ws, data) {
   const { type, serviceName } = data;
   
   switch (type) {
     case 'subscribe_logs':
-      subscribeToLogs(ws, serviceName);
+      await subscribeToLogs(ws, serviceName);
       break;
     case 'unsubscribe_logs':
       unsubscribeFromLogs(ws, serviceName);
@@ -98,7 +121,7 @@ function handleWebSocketMessage(ws, data) {
 }
 
 // 订阅日志
-function subscribeToLogs(ws, serviceName) {
+async function subscribeToLogs(ws, serviceName) {
   if (!logSubscribers.has(serviceName)) {
     logSubscribers.set(serviceName, new Set());
   }
@@ -106,13 +129,22 @@ function subscribeToLogs(ws, serviceName) {
   logSubscribers.get(serviceName).add(ws);
   console.log(`Client subscribed to logs for service: ${serviceName}`);
   
-  // 发送历史日志
-  const logs = proxyLogs.get(serviceName) || [];
-  ws.send(JSON.stringify({
-    type: 'logs_history',
-    serviceName,
-    logs: logs.slice(-100) // 发送最近100条
-  }));
+  // 从数据库获取历史日志
+  try {
+    const logs = await database.getServiceLogs(serviceName, 100);
+    ws.send(JSON.stringify({
+      type: 'logs_history',
+      serviceName,
+      logs: logs
+    }));
+  } catch (error) {
+    console.error('获取历史日志失败:', error);
+    ws.send(JSON.stringify({
+      type: 'logs_history',
+      serviceName,
+      logs: []
+    }));
+  }
 }
 
 // 取消订阅日志
@@ -139,6 +171,74 @@ function broadcast(data) {
   });
 }
 
+// 检查是否有正在运行的代理服务
+async function hasRunningProxyServices() {
+  try {
+    const services = await database.getAllProxyServices();
+    return services.some(service => service.isRunning);
+  } catch (error) {
+    console.error('检查运行服务失败:', error);
+    return false;
+  }
+}
+
+// 检查Eureka服务可用性
+async function checkEurekaAvailability() {
+  try {
+    console.log('🔍 检查Eureka服务可用性...');
+    const url = `http://${config.eureka.host}:${config.eureka.port}${config.eureka.servicePath}`;
+    const response = await axios.get(url, {
+      headers: {
+        'Accept': 'application/json'
+      },
+      timeout: 5000 // 5秒超时
+    });
+    
+    isEurekaAvailable = true;
+    console.log('✅ Eureka服务可用');
+    
+    // 广播Eureka可用状态
+    broadcast({
+      type: 'eureka_availability_updated',
+      isAvailable: true,
+      message: 'Eureka服务连接成功'
+    });
+    
+    return true;
+  } catch (error) {
+    isEurekaAvailable = false;
+    console.error('❌ Eureka服务不可用:', error.message);
+    
+    // 广播Eureka不可用状态
+    broadcast({
+      type: 'eureka_availability_updated',
+      isAvailable: false,
+      message: `Eureka服务不可用: ${error.message}`,
+      error: error.message
+    });
+    
+    return false;
+  }
+}
+
+// 启动Eureka监听（如果还没启动的话）
+async function ensureEurekaMonitoringStarted() {
+  if (!isEurekaMonitoringActive && await hasRunningProxyServices()) {
+    console.log('🚀 启动Eureka状态监听...');
+    await startStatusSync();
+    isEurekaMonitoringActive = true;
+  }
+}
+
+// 停止Eureka监听（如果没有服务运行的话）
+async function ensureEurekaMonitoringStopped() {
+  if (isEurekaMonitoringActive && !(await hasRunningProxyServices())) {
+    console.log('🛑 停止Eureka状态监听...');
+    stopStatusSync();
+    isEurekaMonitoringActive = false;
+  }
+}
+
 // 获取Eureka服务列表
 async function getEurekaServices() {
   try {
@@ -150,28 +250,12 @@ async function getEurekaServices() {
       timeout: 5000 // 5秒超时
     });
     
-    // Eureka连接成功，重置计数器
-    eurekaUnavailableCount = 0;
-    isEurekaShutdownTriggered = false;
-    
     if (response.data && response.data.applications && response.data.applications.application) {
       return response.data.applications.application;
     }
     return [];
   } catch (error) {
     console.error('Failed to fetch Eureka services:', error.message);
-    
-    // 增加不可用计数
-    eurekaUnavailableCount++;
-    console.log(`Eureka不可用次数: ${eurekaUnavailableCount}`);
-    
-    // 连续2次失败就触发自动关闭
-    if (eurekaUnavailableCount >= 2 && !isEurekaShutdownTriggered) {
-      console.error('🚨 检测到Eureka服务器持续不可用，自动关闭所有代理服务...');
-      isEurekaShutdownTriggered = true;
-      await shutdownAllProxyServicesForEureka();
-    }
-    
     return [];
   }
 }
@@ -180,15 +264,28 @@ async function getEurekaServices() {
 async function restoreRunningServices() {
   try {
     const services = await database.getAllProxyServices();
-    for (const service of services) {
-      if (service.isRunning) {
-        console.log(`恢复代理服务: ${service.serviceName}`);
-        await startProxyService(service);
+    const runningServices = services.filter(service => service.isRunning);
+    
+    if (runningServices.length === 0) {
+      console.log('没有运行中的服务需要恢复');
+      return;
+    }
+    
+    console.log(`开始恢复 ${runningServices.length} 个运行中的代理服务...`);
+    
+    for (const service of runningServices) {
+      try {
+        console.log(`恢复代理服务: ${service.serviceName}:${service.port}`);
+        await startProxyService(service, { skipEurekaCheck: true });
+        console.log(`✅ ${service.serviceName} 恢复成功`);
+      } catch (error) {
+        console.error(`❌ 恢复服务 ${service.serviceName} 失败:`, error.message);
+        // 更新数据库状态为停止
+        await database.updateProxyService(service.id, { isRunning: false });
       }
     }
     
-    // 启动状态同步检查
-    await startStatusSync();
+    console.log('代理服务恢复完成');
   } catch (error) {
     console.error('恢复代理服务失败:', error);
   }
@@ -202,23 +299,222 @@ app.get('/api/config', (req, res) => {
 });
 
 // 更新Eureka配置
-app.post('/api/config/eureka', (req, res) => {
-  const { host, port, servicePath, heartbeatInterval } = req.body;
-  config.eureka = { 
-    host, 
-    port, 
-    servicePath: servicePath || '/eureka/apps',
-    heartbeatInterval: heartbeatInterval || 30
-  };
-  res.json({ success: true, config: config.eureka });
+app.post('/api/config/eureka', async (req, res) => {
+  try {
+    // 检查是否有运行中的代理服务
+    const runningServices = await database.getAllProxyServices();
+    const runningCount = runningServices.filter(service => service.isRunning).length;
+    
+    if (runningCount > 0) {
+      const runningServiceNames = runningServices
+        .filter(service => service.isRunning)
+        .map(service => service.serviceName)
+        .slice(0, 5)
+        .join('、');
+      
+      return res.status(400).json({ 
+        success: false, 
+        error: `检测到有 ${runningCount} 个代理服务正在运行（${runningServiceNames}${runningCount > 5 ? ' 等' : ''}），为了确保服务稳定性，请先停止所有运行中的代理服务再修改Eureka配置。`,
+        runningCount: runningCount,
+        runningServices: runningServices.filter(service => service.isRunning).map(s => s.serviceName)
+      });
+    }
+    
+    const { host, port, servicePath, heartbeatInterval } = req.body;
+    
+    // 保存旧配置用于比较
+    const oldConfig = { ...config.eureka };
+    
+    // 构建新配置
+    const newEurekaConfig = { 
+      host, 
+      port, 
+      servicePath: servicePath || '/eureka/apps',
+      heartbeatInterval: heartbeatInterval || 30
+    };
+    
+    // 保存到数据库
+    await database.setEurekaConfig(newEurekaConfig);
+    
+    // 更新内存配置
+    config.eureka = newEurekaConfig;
+    
+    console.log('Eureka配置已更新并保存到数据库:', config.eureka);
+    
+    // 如果配置发生变化，重启状态同步
+    const configChanged = 
+      oldConfig.host !== config.eureka.host ||
+      oldConfig.port !== config.eureka.port ||
+      oldConfig.servicePath !== config.eureka.servicePath;
+      
+    if (configChanged) {
+      console.log('检测到Eureka连接配置变更，重启状态同步...');
+      
+      // 停止现有的状态同步
+      stopStatusSync();
+      
+      // 清理内存缓存
+      clearAllMemoryCaches();
+      
+      // 启动新的状态同步（使用新配置）
+      await startStatusSync();
+      
+      console.log('状态同步已重启，开始使用新的Eureka配置');
+      
+      // 广播配置变更通知
+      broadcast({
+        type: 'eureka_config_updated',
+        data: config.eureka,
+        message: '✅ Eureka配置已更新并重新连接'
+      });
+    }
+    
+    res.json({ 
+      success: true, 
+      config: config.eureka,
+      message: configChanged ? 'Eureka配置已更新、保存到数据库并重新连接' : 'Eureka配置已更新并保存到数据库'
+    });
+  } catch (error) {
+    console.error('更新Eureka配置失败:', error);
+    res.status(500).json({ 
+      success: false, 
+      error: error.message 
+    });
+  }
 });
 
 // 获取Eureka服务列表
 app.get('/api/eureka/services', async (req, res) => {
   try {
     const services = await getEurekaServices();
+    console.log('🔍 获取Eureka服务列表:', services?.length || 0, '个服务');
+    if (services?.length > 0) {
+      console.log('服务详情:', services.map(s => ({ name: s.name, instances: s.instance?.length || 0 })));
+    }
     res.json({ success: true, services });
   } catch (error) {
+    console.error('获取Eureka服务列表失败:', error);
+    res.status(500).json({ success: false, error: error.message });
+  }
+});
+
+// 获取Eureka状态
+app.get('/api/eureka/status', (req, res) => {
+  res.json({ 
+    success: true, 
+    isAvailable: isEurekaAvailable,
+    config: config.eureka
+  });
+});
+
+// 获取本地网络信息（调试用）
+app.get('/api/network/info', (req, res) => {
+  try {
+    const localIP = getLocalIP();
+    const interfaces = os.networkInterfaces();
+    
+    // 只返回非内部IPv4接口信息
+    const networkInfo = {};
+    for (const [name, interfaceList] of Object.entries(interfaces)) {
+      const ipv4Interfaces = interfaceList.filter(iface => 
+        iface.family === 'IPv4' && !iface.internal
+      );
+      if (ipv4Interfaces.length > 0) {
+        networkInfo[name] = ipv4Interfaces.map(iface => ({
+          address: iface.address,
+          netmask: iface.netmask,
+          mac: iface.mac
+        }));
+      }
+    }
+    
+    res.json({
+      success: true,
+      detectedIP: localIP,
+      environmentVariables: {
+        LOCAL_IP: process.env.LOCAL_IP || null,
+        HOST_IP: process.env.HOST_IP || null
+      },
+      availableInterfaces: networkInfo,
+      platform: os.platform(),
+      hostname: os.hostname()
+    });
+  } catch (error) {
+    res.status(500).json({
+      success: false,
+      error: error.message
+    });
+  }
+});
+
+// 手动检查Eureka可用性
+app.post('/api/eureka/check', async (req, res) => {
+  try {
+    console.log('🔍 手动检查Eureka可用性...');
+    const available = await checkEurekaAvailability();
+    
+    res.json({ 
+      success: true, 
+      isAvailable: available,
+      message: available ? 'Eureka服务可用' : 'Eureka服务不可用'
+    });
+  } catch (error) {
+    console.error('检查Eureka可用性失败:', error);
+    res.status(500).json({ 
+      success: false, 
+      error: error.message 
+    });
+  }
+});
+
+// 获取Eureka健康检查状态
+app.get('/api/eureka/health-status', (req, res) => {
+  const currentTime = Date.now();
+  let healthStatus = {
+    isMonitoring: !!eurekaHealthCheckTimer,
+    isAvailable: isEurekaAvailable,
+    unavailableStartTime: eurekaUnavailableStartTime,
+    unavailableDuration: eurekaUnavailableStartTime ? (currentTime - eurekaUnavailableStartTime) / 1000 : 0,
+    maxAllowedTime: 3 * 60, // 3分钟
+    isShutdownTriggered: isEurekaShutdownTriggered
+  };
+  
+  if (healthStatus.unavailableDuration > 0) {
+    healthStatus.remainingTime = Math.max(0, healthStatus.maxAllowedTime - healthStatus.unavailableDuration);
+  }
+  
+  res.json({ 
+    success: true, 
+    healthStatus
+  });
+});
+
+// 启动Eureka健康检查
+app.post('/api/eureka/health-check/start', (req, res) => {
+  try {
+    if (eurekaHealthCheckTimer) {
+      return res.json({ success: false, message: 'Eureka健康检查已在运行中' });
+    }
+    
+    startEurekaHealthCheck();
+    res.json({ success: true, message: 'Eureka健康检查已启动' });
+  } catch (error) {
+    console.error('启动Eureka健康检查失败:', error);
+    res.status(500).json({ success: false, error: error.message });
+  }
+});
+
+// 停止Eureka健康检查
+app.post('/api/eureka/health-check/stop', (req, res) => {
+  try {
+    if (!eurekaHealthCheckTimer) {
+      return res.json({ success: false, message: 'Eureka健康检查未在运行' });
+    }
+    
+    stopEurekaHealthCheck();
+    res.json({ success: true, message: 'Eureka健康检查已停止' });
+  } catch (error) {
+    console.error('停止Eureka健康检查失败:', error);
     res.status(500).json({ success: false, error: error.message });
   }
 });
@@ -239,10 +535,10 @@ app.get('/api/heartbeat/status', (req, res) => {
 });
 
 // 获取服务心跳历史
-app.get('/api/heartbeat/history/:serviceName/:port', (req, res) => {
+app.get('/api/heartbeat/history/:serviceName/:port', async (req, res) => {
   try {
     const { serviceName, port } = req.params;
-    const history = getHeartbeatHistory(serviceName, parseInt(port));
+    const history = await getHeartbeatHistory(serviceName, parseInt(port));
     
     res.json({ 
       success: true, 
@@ -277,10 +573,9 @@ app.get('/api/config/export', async (req, res) => {
     console.log('开始导出配置数据...')
     
     // 获取所有静态配置数据
-    const [proxyServices, tags, autoStartConfig] = await Promise.all([
+    const [proxyServices, tags] = await Promise.all([
       database.getAllProxyServices(),
-      database.getAllTags(),
-      database.getAutoStartConfig()
+      database.getAllTags()
     ])
     
     // 清理运行时状态，只保留配置数据
@@ -297,7 +592,6 @@ app.get('/api/config/export', async (req, res) => {
       data: {
         proxyServices: cleanedServices,
         tags: tags,
-        autoStartConfig: autoStartConfig,
         eurekaConfig: config.eureka // 包含Eureka配置
       }
     }
@@ -350,13 +644,12 @@ app.post('/api/config/import', async (req, res) => {
       })
     }
     
-    const { proxyServices, tags, autoStartConfig, eurekaConfig } = importData.data
+    const { proxyServices, tags, eurekaConfig } = importData.data
     
     // 统计信息
     const stats = {
       services: { imported: 0, skipped: 0, errors: 0 },
-      tags: { imported: 0, skipped: 0, errors: 0 },
-      autoStart: { imported: 0 }
+      tags: { imported: 0, skipped: 0, errors: 0 }
     }
     
     // 导入标签数据
@@ -405,38 +698,22 @@ app.post('/api/config/import', async (req, res) => {
       }
     }
     
-    // 导入自动启动配置
-    if (autoStartConfig && autoStartConfig.serviceIds) {
+
+    
+    // 导入Eureka配置
+    if (eurekaConfig) {
       try {
-        // 获取导入后的服务列表，建立服务名到ID的映射
-        const currentServices = await database.getAllProxyServices()
-        const serviceNameToId = new Map()
-        currentServices.forEach(service => {
-          const key = `${service.serviceName}:${service.port}`
-          serviceNameToId.set(key, service.id)
-        })
+        // 保存到数据库
+        await database.setEurekaConfig(eurekaConfig);
         
-        // 转换自动启动配置中的服务ID
-        const validServiceIds = []
-        for (const oldServiceId of autoStartConfig.serviceIds) {
-          // 找到对应的服务
-          const originalService = proxyServices.find(s => s.id === oldServiceId)
-          if (originalService) {
-            const key = `${originalService.serviceName}:${originalService.port}`
-            const newServiceId = serviceNameToId.get(key)
-            if (newServiceId) {
-              validServiceIds.push(newServiceId)
-            }
-          }
-        }
+        // 更新内存配置
+        config.eureka = { ...config.eureka, ...eurekaConfig };
         
-        // 更新自动启动配置
-        if (validServiceIds.length > 0) {
-          await database.updateAutoStartConfig(validServiceIds)
-          stats.autoStart.imported = validServiceIds.length
-        }
+        console.log('Eureka配置已导入并保存到数据库:', config.eureka);
+        stats.eureka = { imported: 1 };
       } catch (error) {
-        console.error('导入自动启动配置失败:', error)
+        console.error('导入Eureka配置失败:', error);
+        stats.eureka = { imported: 0, error: error.message };
       }
     }
     
@@ -445,8 +722,7 @@ app.post('/api/config/import', async (req, res) => {
     // 重建代理服务器映射
     await rebuildProxyServersMap()
     
-    // 重新加载自动启动配置
-    await autoStartManager.loadAutoStartConfig()
+
     
     // 清理所有内存缓存（因为导入时所有服务都是停止状态）
     clearAllMemoryCaches()
@@ -549,12 +825,12 @@ app.post('/api/ports/:port/kill', async (req, res) => {
 });
 
 // 获取代理服务日志
-app.get('/api/proxy/:serviceName/logs', (req, res) => {
+app.get('/api/proxy/:serviceName/logs', async (req, res) => {
   try {
     const { serviceName } = req.params;
     const { limit = 100 } = req.query;
     
-    const logs = getServiceLogs(serviceName, parseInt(limit));
+    const logs = await getServiceLogs(serviceName, parseInt(limit));
     res.json({ success: true, logs, total: logs.length });
   } catch (error) {
     console.error('获取服务日志失败:', error);
@@ -562,17 +838,17 @@ app.get('/api/proxy/:serviceName/logs', (req, res) => {
   }
 });
 
-// 注释：日志清空改为前端操作，不需要此API
-// app.delete('/api/proxy/:serviceName/logs', (req, res) => {
-//   try {
-//     const { serviceName } = req.params;
-//     clearServiceLogs(serviceName);
-//     res.json({ success: true, message: `服务 ${serviceName} 的日志已清理` });
-//   } catch (error) {
-//     console.error('清理服务日志失败:', error);
-//     res.status(500).json({ success: false, error: error.message });
-//   }
-// });
+// 清理代理服务日志
+app.delete('/api/proxy/:serviceName/logs', async (req, res) => {
+  try {
+    const { serviceName } = req.params;
+    await clearServiceLogs(serviceName);
+    res.json({ success: true, message: `服务 ${serviceName} 的日志已清理` });
+  } catch (error) {
+    console.error('清理服务日志失败:', error);
+    res.status(500).json({ success: false, error: error.message });
+  }
+});
 
 // 批量启动代理服务
 app.post('/api/proxy/batch/start', async (req, res) => {
@@ -750,7 +1026,7 @@ app.get('/api/proxy/list', async (req, res) => {
 // 创建代理服务
 app.post('/api/proxy/create', async (req, res) => {
   try {
-    const { serviceName, port, targets, activeTarget } = req.body;
+    const { serviceName, targets, activeTarget } = req.body;
     
     // 检查服务名是否已存在
     const existingService = await database.getProxyServiceByName(serviceName);
@@ -758,14 +1034,13 @@ app.post('/api/proxy/create', async (req, res) => {
       return res.status(400).json({ success: false, error: '服务名称已存在' });
     }
 
-    // 检查端口是否被占用
-    if (proxyServers.has(`${serviceName}:${port}`)) {
-      return res.status(400).json({ success: false, error: '端口已被占用' });
-    }
+    // 自动分配端口（4000-4100范围）
+    const port = await database.getAvailablePort();
 
     const serviceConfig = { serviceName, port, targets, activeTarget };
     const createdService = await database.createProxyService(serviceConfig);
 
+    console.log(`✅ 创建代理服务成功: ${serviceName} -> 端口 ${port}`);
     broadcast({ type: 'proxy_created', data: createdService });
     res.json({ success: true, service: createdService });
   } catch (error) {
@@ -1113,293 +1388,55 @@ app.get('/api/proxy/filter/tags', async (req, res) => {
   }
 });
 
-// ===== 自动启动配置API =====
-
-// 获取自动启动配置
-app.get('/api/autostart/config', async (req, res) => {
-  try {
-    const autoStartServices = autoStartManager.getAutoStartServices();
-    const services = [];
-    
-    for (const serviceId of autoStartServices) {
-      const service = await database.getProxyServiceById(serviceId);
-      if (service) {
-        services.push(service);
-      }
-    }
-    
-    res.json({ 
-      success: true, 
-      data: {
-        serviceIds: autoStartServices,
-        services: services
-      } 
-    });
-  } catch (error) {
-    console.error('Failed to get auto-start config:', error);
-    res.status(500).json({ success: false, error: error.message });
-  }
-});
-
-// 添加服务到自动启动列表
-app.post('/api/autostart/add/:serviceId', async (req, res) => {
-  try {
-    const { serviceId } = req.params;
-    
-    await autoStartManager.addToAutoStart(serviceId);
-    
-    res.json({ 
-      success: true, 
-      message: '服务已添加到自动启动列表'
-    });
-  } catch (error) {
-    console.error('Failed to add service to auto-start:', error);
-    if (error.message === 'Service not found') {
-      res.status(404).json({ success: false, error: '服务不存在' });
-    } else {
-      res.status(500).json({ success: false, error: error.message });
-    }
-  }
-});
-
-// 从自动启动列表移除服务
-app.delete('/api/autostart/remove/:serviceId', async (req, res) => {
-  try {
-    const { serviceId } = req.params;
-    
-    await autoStartManager.removeFromAutoStart(serviceId);
-    
-    res.json({ 
-      success: true, 
-      message: '服务已从自动启动列表移除'
-    });
-  } catch (error) {
-    console.error('Failed to remove service from auto-start:', error);
-    res.status(500).json({ success: false, error: error.message });
-  }
-});
-
-// 执行自动启动
-app.post('/api/autostart/execute', async (req, res) => {
-  try {
-    const results = await autoStartManager.executeAutoStart(startProxyService);
-    
-    res.json({ 
-      success: true, 
-      data: results,
-      message: `自动启动完成：成功 ${results.succeeded} 个，失败 ${results.failed} 个`
-    });
-  } catch (error) {
-    console.error('Failed to execute auto-start:', error);
-    res.status(500).json({ success: false, error: error.message });
-  }
-});
-
-// 检查服务是否在自动启动列表中
-app.get('/api/autostart/check/:serviceId', async (req, res) => {
-  try {
-    const { serviceId } = req.params;
-    const isEnabled = autoStartManager.isAutoStartEnabled(serviceId);
-    
-    res.json({ 
-      success: true, 
-      data: { isEnabled }
-    });
-  } catch (error) {
-    console.error('Failed to check auto-start status:', error);
-    res.status(500).json({ success: false, error: error.message });
-  }
-});
-
-// 批量添加服务到自动启动列表
-app.post('/api/autostart/batch/add', async (req, res) => {
-  try {
-    const { serviceIds } = req.body;
-    
-    if (!Array.isArray(serviceIds) || serviceIds.length === 0) {
-      return res.status(400).json({ 
-        success: false, 
-        error: '请提供有效的服务ID列表' 
-      });
-    }
-    
-    const results = {
-      succeeded: 0,
-      failed: 0,
-      errors: []
-    };
-    
-    for (const serviceId of serviceIds) {
-      try {
-        await autoStartManager.addToAutoStart(serviceId);
-        results.succeeded++;
-      } catch (error) {
-        results.failed++;
-        results.errors.push({
-          serviceId,
-          error: error.message
-        });
-      }
-    }
-    
-    res.json({ 
-      success: true, 
-      data: results,
-      message: `批量添加完成：成功 ${results.succeeded} 个，失败 ${results.failed} 个`
-    });
-  } catch (error) {
-    console.error('Failed to batch add to auto-start:', error);
-    res.status(500).json({ success: false, error: error.message });
-  }
-});
-
-// 批量移除服务从自动启动列表
-app.post('/api/autostart/batch/remove', async (req, res) => {
-  try {
-    const { serviceIds } = req.body;
-    
-    if (!Array.isArray(serviceIds) || serviceIds.length === 0) {
-      return res.status(400).json({ 
-        success: false, 
-        error: '请提供有效的服务ID列表' 
-      });
-    }
-    
-    const results = {
-      succeeded: 0,
-      failed: 0,
-      errors: []
-    };
-    
-    for (const serviceId of serviceIds) {
-      try {
-        await autoStartManager.removeFromAutoStart(serviceId);
-        results.succeeded++;
-      } catch (error) {
-        results.failed++;
-        results.errors.push({
-          serviceId,
-          error: error.message
-        });
-      }
-    }
-    
-    res.json({ 
-      success: true, 
-      data: results,
-      message: `批量移除完成：成功 ${results.succeeded} 个，失败 ${results.failed} 个`
-    });
-  } catch (error) {
-    console.error('Failed to batch remove from auto-start:', error);
-    res.status(500).json({ success: false, error: error.message });
-  }
-});
-
-// 临时清理API - 清空自动启动配置
-app.post('/api/autostart/clear', async (req, res) => {
-  try {
-    // 直接操作数据库清空配置
-    await new Promise((resolve, reject) => {
-      database.db.run("UPDATE auto_start_config SET service_ids = '[]' WHERE id = 1", (err) => {
-        if (err) {
-          reject(err);
-        } else {
-          resolve();
-        }
-      });
-    });
-    
-    // 重新加载配置
-    await autoStartManager.loadAutoStartConfig();
-    
-    res.json({ 
-      success: true, 
-      message: '自动启动配置已清空'
-    });
-  } catch (error) {
-    console.error('Failed to clear auto-start config:', error);
-    res.status(500).json({ success: false, error: error.message });
-  }
-});
-
-// 手动触发自动启动 - 用于测试
-app.post('/api/autostart/execute', async (req, res) => {
-  try {
-    console.log('Manual auto-start execution triggered...');
-    const results = await autoStartManager.executeAutoStart(startProxyService);
-    
-    res.json({ 
-      success: true, 
-      data: results,
-      message: `自动启动执行完成：成功 ${results.succeeded} 个，失败 ${results.failed} 个`
-    });
-  } catch (error) {
-    console.error('Failed to execute auto-start manually:', error);
-    res.status(500).json({ success: false, error: error.message });
-  }
-});
-
-
-
 // 辅助函数
 
-// 记录心跳数据
-function recordHeartbeat(serviceName, port, status, message = null) {
-  const serverKey = `${serviceName}:${port}`;
-  const timestamp = Date.now();
-  
-  if (!heartbeatHistory.has(serverKey)) {
-    heartbeatHistory.set(serverKey, []);
+// 记录心跳数据（使用数据库存储）
+async function recordHeartbeat(serviceName, port, status, message = null) {
+  try {
+    await database.recordHeartbeat(serviceName, port, status, message);
+    
+    // 获取最近的心跳历史用于广播
+    const recentHistory = await database.getHeartbeatHistory(serviceName, port, 10);
+    
+    // 广播心跳数据更新
+    broadcast({
+      type: 'heartbeat_update',
+      data: {
+        serviceName,
+        port,
+        timestamp: new Date().toISOString(),
+        status,
+        message,
+        history: recentHistory
+      }
+    });
+  } catch (error) {
+    console.error('记录心跳失败:', error);
   }
-  
-  const history = heartbeatHistory.get(serverKey);
-  history.push({
-    timestamp,
-    status, // 'success' | 'error' | 'timeout'
-    message
-  });
-  
-  // 只保留近5分钟的数据
-  const fiveMinutesAgo = timestamp - 5 * 60 * 1000;
-  const filteredHistory = history.filter(item => item.timestamp >= fiveMinutesAgo);
-  heartbeatHistory.set(serverKey, filteredHistory);
-  
-  // 广播心跳数据更新
-  broadcast({
-    type: 'heartbeat_update',
-    data: {
-      serviceName,
-      port,
-      timestamp,
-      status,
-      message,
-      history: filteredHistory
-    }
-  });
 }
 
-// 获取服务心跳历史
-function getHeartbeatHistory(serviceName, port) {
-  const serverKey = `${serviceName}:${port}`;
-  const history = heartbeatHistory.get(serverKey) || [];
-  
-  // 清理过期数据
-  const fiveMinutesAgo = Date.now() - 5 * 60 * 1000;
-  const filteredHistory = history.filter(item => item.timestamp >= fiveMinutesAgo);
-  heartbeatHistory.set(serverKey, filteredHistory);
-  
-  return filteredHistory;
+// 获取服务心跳历史（从数据库）
+async function getHeartbeatHistory(serviceName, port) {
+  try {
+    return await database.getHeartbeatHistory(serviceName, port, 100);
+  } catch (error) {
+    console.error('获取心跳历史失败:', error);
+    return [];
+  }
 }
 
-// 清理服务心跳历史
-function clearHeartbeatHistory(serviceName, port) {
-  const serverKey = `${serviceName}:${port}`;
-  heartbeatHistory.delete(serverKey);
+// 清理服务心跳历史（从数据库）
+async function clearHeartbeatHistory(serviceName, port) {
+  try {
+    await database.clearHeartbeatHistory(serviceName, port);
+  } catch (error) {
+    console.error('清理心跳历史失败:', error);
+  }
 }
 
 // 清理所有内存缓存
 function clearAllMemoryCaches() {
-  console.log('🧹 清理所有内存缓存...')
+  console.log('🧹 清理运行时内存缓存...')
   
   // 清理心跳定时器
   for (const [key, timer] of heartbeatTimers) {
@@ -1407,19 +1444,13 @@ function clearAllMemoryCaches() {
   }
   heartbeatTimers.clear()
   
-  // 清理心跳错误记录
+  // 清理心跳错误记录（这个仍然保留在内存中用于即时通知）
   heartbeatErrors.clear()
   
-  // 清理心跳历史记录
-  heartbeatHistory.clear()
-  
-  // 清理代理日志
-  proxyLogs.clear()
-  
-  // 清理日志订阅者
+  // 清理WebSocket日志订阅者
   logSubscribers.clear()
   
-  console.log('✅ 内存缓存已清理完成')
+  console.log('✅ 运行时缓存已清理完成')
 }
 
 // 重新构建proxyServers Map以同步数据库状态
@@ -1468,33 +1499,108 @@ async function getTagNameById(tagId) {
   }
 }
 
-function getLocalIP() {
+
+
+// 获取本地IP地址（支持数据库配置覆盖）
+async function getLocalIP() {
+  try {
+    // 1. 首先检查数据库中的配置
+    const localIPConfig = await database.getLocalIPConfig();
+    if (localIPConfig && localIPConfig.localIP) {
+      console.log(`使用数据库配置的本机IP: ${localIPConfig.localIP}`);
+      return localIPConfig.localIP;
+    }
+  } catch (error) {
+    console.warn('获取数据库中的本机IP配置失败:', error.message);
+  }
+
+  // 2. 检查环境变量（优先级次高）
+  if (process.env.LOCAL_IP) {
+    console.log(`使用环境变量 LOCAL_IP: ${process.env.LOCAL_IP}`);
+    return process.env.LOCAL_IP;
+  }
+  
+  if (process.env.HOST_IP) {
+    console.log(`使用环境变量 HOST_IP: ${process.env.HOST_IP}`);
+    return process.env.HOST_IP;
+  }
+  
   const interfaces = os.networkInterfaces();
+  
+  // 3. 在容器环境中，优先查找以下网络接口
+  const preferredInterfaces = ['eth0', 'ens3', 'ens4', 'ens5', 'enp0s3', 'enp0s8'];
+  
+  // 首先尝试查找首选的网络接口
+  for (const interfaceName of preferredInterfaces) {
+    const networkInterface = interfaces[interfaceName];
+    if (networkInterface) {
+      for (const iface of networkInterface) {
+        if (iface.family === 'IPv4' && !iface.internal) {
+          console.log(`使用首选网络接口 ${interfaceName} 的IP: ${iface.address}`);
+          return iface.address;
+        }
+      }
+    }
+  }
+  
+  // 4. 如果没有找到首选接口，则查找所有非内部IPv4地址
+  // 排除一些已知的内部网络接口
+  const excludeInterfaces = ['lo', 'lo0', 'docker0', 'virbr0'];
+  
   for (const name of Object.keys(interfaces)) {
+    if (excludeInterfaces.includes(name)) {
+      continue;
+    }
+    
     for (const iface of interfaces[name]) {
       if (iface.family === 'IPv4' && !iface.internal) {
+        console.log(`使用备选网络接口 ${name} 的IP: ${iface.address}`);
         return iface.address;
       }
     }
   }
+  
+  // 5. 最后的fallback：查看Docker bridge网络（通常是172.17.0.x）
+  for (const name of Object.keys(interfaces)) {
+    for (const iface of interfaces[name]) {
+      if (iface.family === 'IPv4' && !iface.internal && 
+          (iface.address.startsWith('172.') || iface.address.startsWith('192.168.'))) {
+        console.log(`使用Docker/私有网络接口 ${name} 的IP: ${iface.address}`);
+        return iface.address;
+      }
+    }
+  }
+  
+  // 6. 如果还是没有找到，返回localhost作为最终fallback
+  console.warn('未找到可用的外部IP地址，使用 127.0.0.1 作为fallback');
+  console.warn('建议在系统配置中设置本机IP地址');
   return '127.0.0.1';
+}
+
+// 统一生成实例ID的函数
+async function generateInstanceId(serviceName, port) {
+  const localIP = await getLocalIP();
+  return `${localIP}:${serviceName}:${port}`;
 }
 
 async function registerToEureka(serviceName, port) {
   try {
-    // 优先用前端配置的 eureka.host
-    let ip = config.eureka.host;
-    if (ip === 'localhost' || ip === '127.0.0.1') {
-      ip = getLocalIP();
+    // 确保使用最新的Eureka配置
+    const latestEurekaConfig = await database.getEurekaConfig();
+    if (latestEurekaConfig) {
+      config.eureka = { ...config.eureka, ...latestEurekaConfig };
     }
-
+    
+    const localIP = await getLocalIP();
+    const instanceId = await generateInstanceId(serviceName, port);
     const eurekaUrl = `http://${config.eureka.host}:${config.eureka.port}/eureka/apps/${serviceName.toUpperCase()}`;
+    
     const instance = {
       instance: {
-        instanceId: `${ip}:${serviceName}:${port}`,
-        hostName: ip,
+        instanceId: instanceId,
+        hostName: localIP,
         app: serviceName.toUpperCase(),
-        ipAddr: ip,
+        ipAddr: localIP,
         vipAddress: serviceName,
         status: 'UP',
         port: {
@@ -1514,21 +1620,31 @@ async function registerToEureka(serviceName, port) {
       }
     });
 
-    console.log(`Service ${serviceName} registered to Eureka with ip ${ip}`);
+    console.log(`Service ${serviceName} registered to Eureka with local IP ${localIP}:${port} via Eureka server ${config.eureka.host}:${config.eureka.port}`);
   } catch (error) {
     console.error(`Failed to register ${serviceName} to Eureka:`, error.message);
   }
 }
 
-async function startProxyService(service) {
+async function startProxyService(service, options = {}) {
   const { serviceName, port, targets, activeTarget } = service;
   const serverKey = `${serviceName}:${port}`;
+  const { skipEurekaCheck = false } = options;
   
   if (proxyServers.has(serverKey)) {
     throw new Error('服务已在运行中');
   }
+  
+  // 检查Eureka是否可用（除非跳过检查）
+  if (!skipEurekaCheck && isEurekaAvailable === false) {
+    throw new Error('Eureka服务不可用，无法启动代理服务');
+  }
 
   const proxyApp = express();
+  
+  // 添加请求体解析中间件
+  proxyApp.use(express.json({ limit: '50mb' }));
+  proxyApp.use(express.urlencoded({ extended: true, limit: '50mb' }));
   
   const proxyConfig = {
     target: targets[activeTarget],
@@ -1536,10 +1652,15 @@ async function startProxyService(service) {
     pathRewrite: {
       '^/': '/'
     },
+    timeout: 30000, // 30秒超时
+    proxyTimeout: 30000, // 代理超时
+    secure: true, // 支持HTTPS
+    followRedirects: true,
+    logLevel: 'debug',
     onError: (err, req, res) => {
       console.error(`Proxy error for ${serviceName}:`, err.message);
       
-      // 记录错误日志
+      // 记录错误日志（异步执行，不等待）
       logProxyRequest(serviceName, {
         timestamp: new Date().toISOString(),
         method: req.method,
@@ -1549,12 +1670,20 @@ async function startProxyService(service) {
         error: err.message,
         requestBody: req.body,
         responseBody: { error: 'Proxy error', message: err.message }
-      });
+      }).catch(err => console.error('记录错误日志失败:', err));
       
       res.status(500).json({ error: 'Proxy error', message: err.message });
     },
     onProxyReq: (proxyReq, req, res) => {
       console.log(`Proxying ${req.method} ${req.url} to ${targets[activeTarget]}`);
+      
+      // 确保请求体被正确写入到代理请求中
+      if (req.body && (req.method === 'POST' || req.method === 'PUT' || req.method === 'PATCH')) {
+        const bodyData = JSON.stringify(req.body);
+        proxyReq.setHeader('Content-Type', 'application/json');
+        proxyReq.setHeader('Content-Length', Buffer.byteLength(bodyData));
+        proxyReq.write(bodyData);
+      }
       
       // 记录请求开始
       req.startTime = Date.now();
@@ -1588,14 +1717,14 @@ async function startProxyService(service) {
           parsedResponseBody = responseBody;
         }
         
-        // 记录完整的请求日志
+        // 记录完整的请求日志（异步执行，不等待）
         logProxyRequest(serviceName, {
           ...req.proxyLogData,
           status: proxyRes.statusCode,
           duration,
           responseHeaders: proxyRes.headers,
           responseBody: parsedResponseBody
-        });
+        }).catch(err => console.error('记录请求日志失败:', err));
       });
     }
   };
@@ -1640,6 +1769,8 @@ async function startProxyService(service) {
   // 重建Map以同步数据库状态
   await rebuildProxyServersMap();
 
+
+  
   // 注册到Eureka并启动心跳
   await registerToEureka(serviceName, port);
   startEurekaHeartbeat(serviceName, port);
@@ -1661,7 +1792,7 @@ async function stopProxyService(service) {
       console.log(`正在关闭代理服务: ${serviceName}:${port}`);
       
       // 停止心跳
-      stopEurekaHeartbeat(serviceName, port);
+      await stopEurekaHeartbeat(serviceName, port);
       
       // 使用回调方式安全关闭服务器
       await new Promise((resolve, reject) => {
@@ -1714,7 +1845,7 @@ async function stopProxyService(service) {
       console.error(`Error stopping proxy service ${serviceName}:`, error);
       // 确保清理操作完成
       proxyServers.delete(serverKey);
-      stopEurekaHeartbeat(serviceName, port);
+      await stopEurekaHeartbeat(serviceName, port);
       throw error;
     }
   }
@@ -1722,7 +1853,7 @@ async function stopProxyService(service) {
 
 async function unregisterFromEureka(serviceName, port) {
   try {
-    const instanceId = `localhost:${serviceName}:${port}`;
+    const instanceId = await generateInstanceId(serviceName, port);
     const eurekaUrl = `http://${config.eureka.host}:${config.eureka.port}/eureka/apps/${serviceName.toUpperCase()}/${instanceId}`;
     
     await axios.delete(eurekaUrl, {
@@ -1758,7 +1889,7 @@ function startEurekaHeartbeat(serviceName, port) {
 }
 
 // 停止Eureka心跳
-function stopEurekaHeartbeat(serviceName, port) {
+async function stopEurekaHeartbeat(serviceName, port) {
   const heartbeatKey = `${serviceName}:${port}`;
   
   if (heartbeatTimers.has(heartbeatKey)) {
@@ -1773,7 +1904,7 @@ function stopEurekaHeartbeat(serviceName, port) {
   }
   
   // 清理心跳历史数据
-  clearHeartbeatHistory(serviceName, port);
+  await clearHeartbeatHistory(serviceName, port);
 }
 
 // 发送Eureka心跳
@@ -1781,7 +1912,7 @@ async function sendEurekaHeartbeat(serviceName, port) {
   const serverKey = `${serviceName}:${port}`;
   
   try {
-    const instanceId = `localhost:${serviceName}:${port}`;
+    const instanceId = await generateInstanceId(serviceName, port);
     const heartbeatUrl = `http://${config.eureka.host}:${config.eureka.port}/eureka/apps/${serviceName.toUpperCase()}/${instanceId}`;
     
     // 发送PUT请求作为心跳
@@ -1793,7 +1924,7 @@ async function sendEurekaHeartbeat(serviceName, port) {
     });
     
     // 记录成功的心跳
-    recordHeartbeat(serviceName, port, 'success');
+    await recordHeartbeat(serviceName, port, 'success');
     
     // 心跳成功，清除错误记录
     if (heartbeatErrors.has(serverKey)) {
@@ -1813,7 +1944,7 @@ async function sendEurekaHeartbeat(serviceName, port) {
   } catch (error) {
     // 记录失败的心跳
     const status = error.code === 'ECONNABORTED' ? 'timeout' : 'error';
-    recordHeartbeat(serviceName, port, status, error.message);
+    await recordHeartbeat(serviceName, port, status, error.message);
     
     // 心跳失败，记录错误信息
     const errorInfo = {
@@ -1840,6 +1971,173 @@ async function sendEurekaHeartbeat(serviceName, port) {
   }
 }
 
+// 启动定期数据清理任务
+function startDataCleanupTask() {
+  console.log('🧹 启动定期数据清理任务...');
+  
+  // 每24小时清理一次旧数据
+  setInterval(async () => {
+    try {
+      console.log('🧹 开始清理旧数据...');
+      
+      // 清理旧的心跳历史（保留最近1000条）
+      await database.cleanupOldHeartbeatHistory(1000);
+      
+      // 清理旧的代理日志（保留最近10000条）
+      await database.cleanupOldProxyLogs(10000);
+      
+      console.log('✅ 旧数据清理完成');
+    } catch (error) {
+      console.error('❌ 清理旧数据失败:', error);
+    }
+  }, 24 * 60 * 60 * 1000); // 24小时间隔
+}
+
+// 启动Eureka健康检查
+function startEurekaHealthCheck() {
+  console.log('🔍 启动Eureka健康检查监控...');
+  
+  // 每30秒检查一次Eureka健康状态
+  eurekaHealthCheckTimer = setInterval(async () => {
+    try {
+      const currentTime = Date.now();
+      const available = await checkEurekaAvailability();
+      
+      if (available) {
+        // Eureka可用，重置不可用开始时间
+        if (eurekaUnavailableStartTime) {
+          const unavailableDuration = (currentTime - eurekaUnavailableStartTime) / 1000;
+          console.log(`✅ Eureka服务恢复可用 (不可用持续时间: ${unavailableDuration.toFixed(1)}秒)`);
+          eurekaUnavailableStartTime = null;
+          
+          // 广播恢复通知
+          broadcast({
+            type: 'eureka_health_recovered',
+            message: `Eureka服务已恢复可用`,
+            unavailableDuration: unavailableDuration
+          });
+        }
+      } else {
+        // Eureka不可用
+        if (!eurekaUnavailableStartTime) {
+          // 第一次检测到不可用
+          eurekaUnavailableStartTime = currentTime;
+          console.log('⚠️ 检测到Eureka服务不可用，开始计时...');
+          
+          broadcast({
+            type: 'eureka_health_warning',
+            message: 'Eureka服务不可用，正在监控中...',
+            startTime: eurekaUnavailableStartTime
+          });
+        } else {
+          // 已经不可用一段时间了
+          const unavailableDuration = (currentTime - eurekaUnavailableStartTime) / 1000;
+          const maxUnavailableTime = 3 * 60; // 3分钟
+          
+          console.log(`⚠️ Eureka持续不可用 ${unavailableDuration.toFixed(1)}秒 (最大允许: ${maxUnavailableTime}秒)`);
+          
+          // 广播状态更新
+          broadcast({
+            type: 'eureka_health_status',
+            message: `Eureka不可用已持续 ${Math.floor(unavailableDuration)}秒`,
+            unavailableDuration: unavailableDuration,
+            maxAllowedTime: maxUnavailableTime,
+            remainingTime: Math.max(0, maxUnavailableTime - unavailableDuration)
+          });
+          
+          // 如果超过3分钟，自动终止所有服务
+          if (unavailableDuration >= maxUnavailableTime && !isEurekaShutdownTriggered) {
+            console.error(`🚨 Eureka服务不可用超过${maxUnavailableTime}秒，自动终止所有代理服务...`);
+            isEurekaShutdownTriggered = true;
+            
+            // 广播紧急关闭通知
+            broadcast({
+              type: 'eureka_emergency_shutdown',
+              message: `Eureka服务不可用超过${maxUnavailableTime}秒，系统自动终止所有代理服务`,
+              unavailableDuration: unavailableDuration,
+              reason: 'eureka_timeout'
+            });
+            
+            // 执行关闭操作
+            await shutdownAllProxyServicesForEureka();
+            
+            // 重置状态，以便下次可以重新触发
+            setTimeout(() => {
+              isEurekaShutdownTriggered = false;
+              console.log('🔄 重置Eureka关闭触发状态，允许下次自动关闭');
+            }, 60000); // 1分钟后重置，避免频繁触发
+          }
+        }
+      }
+    } catch (error) {
+      console.error('Eureka健康检查失败:', error);
+    }
+  }, 30000); // 30秒间隔
+}
+
+// 停止Eureka健康检查
+function stopEurekaHealthCheck() {
+  if (eurekaHealthCheckTimer) {
+    clearInterval(eurekaHealthCheckTimer);
+    eurekaHealthCheckTimer = null;
+    eurekaUnavailableStartTime = null;
+    console.log('🛑 Eureka健康检查已停止');
+  }
+}
+
+// 初始化端口范围配置
+async function initializePortRangeConfig() {
+  try {
+    // 检查是否已有端口范围配置
+    const existingConfig = await database.getPortRangeConfig();
+    
+    if (!existingConfig) {
+      // 从环境变量读取端口范围配置
+      const startPort = parseInt(process.env.PORT_RANGE_START) || 4000;
+      const endPort = parseInt(process.env.PORT_RANGE_END) || 4100;
+      
+      // 验证端口范围
+      if (startPort >= endPort) {
+        throw new Error('起始端口必须小于结束端口');
+      }
+      
+      if (startPort < 1 || endPort > 65535) {
+        throw new Error('端口范围必须在1-65535之间');
+      }
+      
+      const portRangeConfig = {
+        startPort: startPort,
+        endPort: endPort,
+        totalPorts: endPort - startPort + 1,
+        description: '代理服务端口范围配置',
+        createdAt: new Date().toISOString()
+      };
+      
+      await database.setPortRangeConfig(portRangeConfig);
+      console.log(`🔧 端口范围配置初始化完成: ${startPort}-${endPort} (${portRangeConfig.totalPorts}个端口)`);
+      
+      // 如果是从环境变量设置的，给出Docker run命令提示
+      if (process.env.PORT_RANGE_START || process.env.PORT_RANGE_END) {
+        console.log(`💡 请确保Docker容器映射了端口范围: -p ${startPort}-${endPort}:${startPort}-${endPort}`);
+      }
+    } else {
+      console.log(`✅ 端口范围配置已存在: ${existingConfig.startPort}-${existingConfig.endPort} (${existingConfig.totalPorts}个端口)`);
+    }
+  } catch (error) {
+    console.error('❌ 初始化端口范围配置失败:', error);
+    // 使用默认配置
+    const defaultConfig = {
+      startPort: 4000,
+      endPort: 4100,
+      totalPorts: 101,
+      description: '默认端口范围配置',
+      createdAt: new Date().toISOString()
+    };
+    await database.setPortRangeConfig(defaultConfig);
+    console.log('🔧 使用默认端口范围配置: 4000-4100');
+  }
+}
+
 // 启动状态同步检查
 async function startStatusSync() {
   console.log('启动Eureka状态同步检查...');
@@ -1847,7 +2145,7 @@ async function startStatusSync() {
   // 立即执行一次同步
   await syncServicesWithEureka();
   
-  // 每60秒检查一次状态
+  // 每60秒检查一次代理服务状态
   statusSyncTimer = setInterval(async () => {
     try {
       await syncServicesWithEureka();
@@ -1866,50 +2164,58 @@ function stopStatusSync() {
   }
 }
 
-// 记录代理请求日志
-function logProxyRequest(serviceName, logData) {
-  if (!proxyLogs.has(serviceName)) {
-    proxyLogs.set(serviceName, []);
-  }
-  
-  const logs = proxyLogs.get(serviceName);
-  logs.push({
-    id: Date.now() + Math.random(),
-    ...logData
-  });
-  
-  // 保持最多1000条日志
-  if (logs.length > 1000) {
-    logs.splice(0, logs.length - 1000);
-  }
-  
-  // 推送给订阅者
-  const subscribers = logSubscribers.get(serviceName);
-  if (subscribers && subscribers.size > 0) {
-    const message = JSON.stringify({
-      type: 'new_log',
-      serviceName,
-      log: logs[logs.length - 1]
-    });
+
+
+// 记录代理请求日志（使用数据库存储）
+async function logProxyRequest(serviceName, logData) {
+  try {
+    // 保存到数据库
+    const result = await database.logProxyRequest(serviceName, logData);
     
-    subscribers.forEach(ws => {
-      if (ws.readyState === WebSocket.OPEN) {
-        ws.send(message);
-      }
-    });
+    // 创建带ID的日志对象用于广播
+    const logWithId = {
+      id: result.id,
+      ...logData
+    };
+    
+    // 推送给订阅者
+    const subscribers = logSubscribers.get(serviceName);
+    if (subscribers && subscribers.size > 0) {
+      const message = JSON.stringify({
+        type: 'new_log',
+        serviceName,
+        log: logWithId
+      });
+      
+      subscribers.forEach(ws => {
+        if (ws.readyState === WebSocket.OPEN) {
+          ws.send(message);
+        }
+      });
+    }
+  } catch (error) {
+    console.error('记录代理日志失败:', error);
   }
 }
 
-// 获取服务日志
-function getServiceLogs(serviceName, limit = 100) {
-  const logs = proxyLogs.get(serviceName) || [];
-  return logs.slice(-limit);
+// 获取服务日志（从数据库）
+async function getServiceLogs(serviceName, limit = 100) {
+  try {
+    return await database.getServiceLogs(serviceName, limit);
+  } catch (error) {
+    console.error('获取服务日志失败:', error);
+    return [];
+  }
 }
 
-// 清理服务日志
-function clearServiceLogs(serviceName) {
-  proxyLogs.delete(serviceName);
-  logSubscribers.delete(serviceName);
+// 清理服务日志（从数据库）
+async function clearServiceLogs(serviceName) {
+  try {
+    await database.clearServiceLogs(serviceName);
+    // 不需要清理 logSubscribers，这是WebSocket连接状态
+  } catch (error) {
+    console.error('清理服务日志失败:', error);
+  }
 }
 
 // 因Eureka不可用而关闭所有代理服务
@@ -2039,7 +2345,7 @@ async function syncServicesWithEureka() {
         
         // 如果本地没有运行但Eureka有记录，可能需要清理心跳定时器
         if (!localRunning && heartbeatTimers.has(serverKey)) {
-          stopEurekaHeartbeat(serviceName, port);
+          await stopEurekaHeartbeat(serviceName, port);
         }
       }
     }
@@ -2073,9 +2379,10 @@ async function gracefulShutdown(signal) {
       console.log('HTTP服务器已停止接受新连接');
     });
     
-    // 2. 停止状态同步
+    // 2. 停止状态同步和健康检查
     stopStatusSync();
-    console.log('状态同步已停止');
+    stopEurekaHealthCheck();
+    console.log('状态同步和健康检查已停止');
     
     // 3. 清理所有心跳定时器
     for (const [key, timer] of heartbeatTimers) {
@@ -2202,7 +2509,7 @@ process.on('unhandledRejection', (reason, promise) => {
   // 不要自动退出，只记录错误
 });
 
-const PORT = process.env.PORT || 3000;
+const PORT = process.env.PORT || 3400;
 server.listen(PORT, () => {
   console.log(`Switch Service server running on port ${PORT}`);
 });
@@ -2215,6 +2522,227 @@ app.use(express.static(clientDistPath));
 // 前端路由 history fallback
 app.get(/^\/(?!api|ws).*/, (req, res) => {
   res.sendFile(path.join(clientDistPath, 'index.html'));
+});
+
+// 获取本机IP配置
+app.get('/api/config/local-ip', async (req, res) => {
+  try {
+    let localIPConfig = await database.getLocalIPConfig();
+    
+    // 检查配置是否有效
+    if (!localIPConfig || typeof localIPConfig !== 'object' || !localIPConfig.localIP) {
+      console.log('本机IP配置无效或不存在，自动设置默认值');
+      
+      // 获取本机IP
+      const detectedIP = await getLocalIP();
+      localIPConfig = { localIP: detectedIP };
+      
+      // 保存到数据库
+      await database.setLocalIPConfig(localIPConfig);
+      console.log(`已自动设置本机IP配置: ${detectedIP}`);
+    }
+    
+    res.json({ 
+      success: true, 
+      config: localIPConfig
+    });
+  } catch (error) {
+    console.error('获取本机IP配置失败:', error);
+    res.status(500).json({ 
+      success: false, 
+      error: error.message 
+    });
+  }
+});
+
+// 更新本机IP配置
+app.post('/api/config/local-ip', async (req, res) => {
+  try {
+    const { localIP } = req.body;
+    
+    if (!localIP) {
+      return res.status(400).json({ 
+        success: false, 
+        error: '请提供有效的本机IP地址' 
+      });
+    }
+    
+    // 简单的IP格式验证
+    const ipRegex = /^(\d{1,3}\.){3}\d{1,3}$/;
+    if (!ipRegex.test(localIP)) {
+      return res.status(400).json({ 
+        success: false, 
+        error: '请提供有效的IP地址格式' 
+      });
+    }
+    
+    const localIPConfig = { localIP };
+    await database.setLocalIPConfig(localIPConfig);
+    
+    console.log('本机IP配置已更新并保存到数据库:', localIPConfig);
+    
+    res.json({ 
+      success: true, 
+      config: localIPConfig,
+      message: '本机IP配置已更新并保存到数据库'
+    });
+  } catch (error) {
+    console.error('更新本机IP配置失败:', error);
+    res.status(500).json({ 
+      success: false, 
+      error: error.message 
+    });
+  }
+});
+
+// 获取可用端口
+app.get('/api/ports/available', async (req, res) => {
+  try {
+    const availablePort = await database.getAvailablePort();
+    res.json({ 
+      success: true, 
+      port: availablePort 
+    });
+  } catch (error) {
+    console.error('获取可用端口失败:', error);
+    res.status(500).json({ 
+      success: false, 
+      error: error.message 
+    });
+  }
+});
+
+// 获取端口使用情况统计
+app.get('/api/ports/usage', async (req, res) => {
+  try {
+    const stats = await database.getPortUsageStats();
+    res.json({ 
+      success: true, 
+      stats: stats 
+    });
+  } catch (error) {
+    console.error('获取端口使用情况失败:', error);
+    
+    // 如果是JSON解析错误，返回默认值
+    if (error.message.includes('not valid JSON')) {
+      console.log('端口范围配置损坏，使用默认配置');
+      const defaultStats = {
+        startPort: 4000,
+        endPort: 4100,
+        totalPorts: 101,
+        usedPorts: [],
+        usedCount: 0,
+        availablePorts: Array.from({ length: 101 }, (_, i) => 4000 + i),
+        availableCount: 101
+      };
+      
+      res.json({ 
+        success: true, 
+        stats: defaultStats 
+      });
+      return;
+    }
+    
+    res.status(500).json({ 
+      success: false, 
+      error: error.message 
+    });
+  }
+});
+
+// 获取端口范围配置
+app.get('/api/config/port-range', async (req, res) => {
+  try {
+    let config = await database.getPortRangeConfig();
+    
+    // 如果配置为空或无效，设置默认配置
+    if (!config || typeof config !== 'object') {
+      console.log('端口范围配置无效，设置默认配置');
+      config = {
+        startPort: 4000,
+        endPort: 4100,
+        totalPorts: 101,
+        description: '默认端口范围配置',
+        updatedAt: new Date().toISOString()
+      };
+      
+      // 保存默认配置
+      await database.setPortRangeConfig(config);
+    }
+    
+    res.json({ success: true, data: config });
+  } catch (error) {
+    console.error('获取端口范围配置失败:', error);
+    
+    // 如果是JSON解析错误，返回默认配置
+    if (error.message.includes('not valid JSON')) {
+      console.log('端口范围配置损坏，返回默认配置');
+      const defaultConfig = {
+        startPort: 4000,
+        endPort: 4100,
+        totalPorts: 101,
+        description: '默认端口范围配置',
+        updatedAt: new Date().toISOString()
+      };
+      
+      res.json({ success: true, data: defaultConfig });
+      return;
+    }
+    
+    res.status(500).json({ success: false, error: error.message });
+  }
+});
+
+// 设置端口范围配置
+app.post('/api/config/port-range', async (req, res) => {
+  try {
+    const { startPort, endPort, description } = req.body;
+    
+    // 验证输入
+    if (!startPort || !endPort || typeof startPort !== 'number' || typeof endPort !== 'number') {
+      return res.status(400).json({ success: false, error: '端口参数无效' });
+    }
+    
+    if (startPort >= endPort) {
+      return res.status(400).json({ success: false, error: '起始端口必须小于结束端口' });
+    }
+    
+    if (startPort < 1 || endPort > 65535) {
+      return res.status(400).json({ success: false, error: '端口范围必须在1-65535之间' });
+    }
+    
+    // 检查是否有服务使用了范围外的端口
+    const portStats = await database.getPortUsageStats();
+    const invalidPorts = portStats.usedPorts.filter(port => port < startPort || port > endPort);
+    if (invalidPorts.length > 0) {
+      return res.status(400).json({ 
+        success: false, 
+        error: `有${invalidPorts.length}个服务使用了新范围外的端口: ${invalidPorts.join(', ')}，请先停止这些服务`
+      });
+    }
+    
+    const config = {
+      startPort: startPort,
+      endPort: endPort,
+      totalPorts: endPort - startPort + 1,
+      description: description || '',
+      updatedAt: new Date().toISOString()
+    };
+    
+    await database.setPortRangeConfig(config);
+    
+    console.log(`🔧 端口范围配置更新: ${startPort}-${endPort} (${config.totalPorts}个端口)`);
+    console.log(`💡 请确保Docker容器映射了端口范围: -p ${startPort}-${endPort}:${startPort}-${endPort}`);
+    
+    res.json({ 
+      success: true, 
+      message: '端口范围配置保存成功',
+      dockerCommand: `docker run -p 3400:3400 -p ${startPort}-${endPort}:${startPort}-${endPort} your-image`
+    });
+  } catch (error) {
+    console.error('设置端口范围配置失败:', error);
+    res.status(500).json({ success: false, error: error.message });
+  }
 });
 
 module.exports = app; 

@@ -55,8 +55,12 @@ RUN chown -R nextjs:nodejs /app
 # 切换到非root用户
 USER nextjs
 
-# 暴露端口
-EXPOSE 3400 3456 20000-30000
+# 环境变量：端口范围配置
+ENV PORT_RANGE_START=4000
+ENV PORT_RANGE_END=4100
+
+# 暴露端口：主服务端口和代理服务端口范围
+EXPOSE 3400 4000-4100
 
 # 健康检查
 HEALTHCHECK --interval=30s --timeout=3s --start-period=5s --retries=3 \

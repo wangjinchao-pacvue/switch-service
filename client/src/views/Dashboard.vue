@@ -143,7 +143,21 @@
                   </span>
                 </div>
                 <div class="log-message">
-                  <span class="log-text">{{ log.message }}</span>
+                  <template v-if="isProxyRequestLog(log) || isProxyResponseLog(log)">
+                    <span class="log-text">
+                      <el-tag 
+                        :type="getServiceTagType(extractServiceNameFromMessage(log.message))"
+                        size="small"
+                        style="margin-right: 8px;"
+                      >
+                        {{ extractServiceNameFromMessage(log.message) }}
+                      </el-tag>
+                      {{ removeServiceTagFromMessage(log.message) }}
+                    </span>
+                  </template>
+                  <template v-else>
+                    <span class="log-text">{{ log.message }}</span>
+                  </template>
                 </div>
               </div>
               <div class="log-actions" v-if="isProxyRequestLog(log)">
@@ -739,34 +753,28 @@
             
             <div class="log-body" v-if="log?.requestBody || log?.responseBody">
               <div class="log-section" v-if="log?.requestBody">
-                <div class="section-header">
-                  <h4>请求体</h4>
-                  <el-button 
-                    link 
-                    size="small"
-                    @click="toggleSection(log?.id, 'request')"
-                  >
-                    {{ getExpandedState(log?.id, 'request') ? 'Show Less' : 'Show More' }}
-                  </el-button>
-                </div>
-                <div class="section-content" v-show="getExpandedState(log?.id, 'request')">
-                  <pre class="code-block">{{ formatJson(log?.requestBody) }}</pre>
+                <h4>请求体</h4>
+                <div class="json-container">
+                  <json-viewer 
+                    :value="log?.requestBody" 
+                    :expand-depth="2"
+                    :show-array-index="true"
+                    :theme="appStore.theme === 'dark' ? 'jv-dark' : 'jv-light'"
+                    style="background: var(--el-bg-color-page); background-color: var(--el-bg-color-page); border-radius: 4px; padding: 8px; border: 1px solid var(--el-border-color);"
+                  />
                 </div>
               </div>
               
               <div class="log-section" v-if="log?.responseBody">
-                <div class="section-header">
-                  <h4>响应体</h4>
-                  <el-button 
-                    link 
-                    size="small"
-                    @click="toggleSection(log?.id, 'response')"
-                  >
-                    {{ getExpandedState(log?.id, 'response') ? 'Show Less' : 'Show More' }}
-                  </el-button>
-                </div>
-                <div class="section-content" v-show="getExpandedState(log?.id, 'response')">
-                  <pre class="code-block">{{ formatJson(log?.responseBody) }}</pre>
+                <h4>响应体</h4>
+                <div class="json-container">
+                  <json-viewer 
+                    :value="log?.responseBody" 
+                    :expand-depth="2"
+                    :show-array-index="true"
+                    :theme="appStore.theme === 'dark' ? 'jv-dark' : 'jv-light'"
+                    style="background: var(--el-bg-color-page); background-color: var(--el-bg-color-page); border-radius: 4px; padding: 8px; border: 1px solid var(--el-border-color);"
+                  />
                 </div>
               </div>
             </div>
@@ -1238,8 +1246,15 @@
               复制
             </el-button>
           </div>
-          <div class="code-container">
-            <pre class="code-block">{{ formatJson(currentRequestDetails.requestBody) }}</pre>
+          <div class="json-container">
+            <json-viewer 
+              :value="currentRequestDetails.requestBody" 
+              :expand-depth="3"
+              :show-array-index="true"
+              copyable
+              :theme="appStore.theme === 'dark' ? 'jv-dark' : 'jv-light'"
+              style="background: var(--el-bg-color-page); background-color: var(--el-bg-color-page); border-radius: 4px; padding: 12px; border: 1px solid var(--el-border-color);"
+            />
           </div>
         </div>
 
@@ -1267,8 +1282,15 @@
               复制
             </el-button>
           </div>
-          <div class="code-container">
-            <pre class="code-block">{{ formatJson(currentRequestDetails.responseBody) }}</pre>
+          <div class="json-container">
+            <json-viewer 
+              :value="currentRequestDetails.responseBody" 
+              :expand-depth="3"
+              :show-array-index="true"
+              copyable
+              :theme="appStore.theme === 'dark' ? 'jv-dark' : 'jv-light'"
+              style="background: var(--el-bg-color-page); background-color: var(--el-bg-color-page); border-radius: 4px; padding: 12px; border: 1px solid var(--el-border-color);"
+            />
           </div>
         </div>
 
@@ -1350,8 +1372,15 @@
               复制
             </el-button>
           </div>
-          <div class="code-container">
-            <pre class="code-block">{{ formatJson(currentSystemLogDetails.requestBody) }}</pre>
+          <div class="json-container">
+            <json-viewer 
+              :value="currentSystemLogDetails.requestBody" 
+              :expand-depth="3"
+              :show-array-index="true"
+              copyable
+              :theme="appStore.theme === 'dark' ? 'jv-dark' : 'jv-light'"
+              style="background: var(--el-bg-color-page); background-color: var(--el-bg-color-page); border-radius: 4px; padding: 12px; border: 1px solid var(--el-border-color);"
+            />
           </div>
         </div>
 
@@ -1379,8 +1408,15 @@
               复制
             </el-button>
           </div>
-          <div class="code-container">
-            <pre class="code-block">{{ formatJson(currentSystemLogDetails.responseBody) }}</pre>
+          <div class="json-container">
+            <json-viewer 
+              :value="currentSystemLogDetails.responseBody" 
+              :expand-depth="3"
+              :show-array-index="true"
+              copyable
+              :theme="appStore.theme === 'dark' ? 'jv-dark' : 'jv-light'"
+              style="background: var(--el-bg-color-page); background-color: var(--el-bg-color-page); border-radius: 4px; padding: 12px; border: 1px solid var(--el-border-color);"
+            />
           </div>
         </div>
 
@@ -3116,8 +3152,43 @@ const copyToClipboard = async (text) => {
 const isProxyRequestLog = (log) => {
   if (!log || !log.message) return false
   
-  // 只有"Proxying"开头的日志显示详情按钮，响应日志不显示
+  // 只有"[serviceName] Proxying"格式的日志显示详情按钮，响应日志不显示
   return log.message.includes('Proxying') && !log.message.includes('Proxy response')
+}
+
+// 判断是否为代理响应日志
+const isProxyResponseLog = (log) => {
+  if (!log || !log.message) return false
+  
+  return log.message.includes('Proxy response')
+}
+
+// 从日志消息中提取服务名称
+const extractServiceNameFromMessage = (message) => {
+  if (!message) return ''
+  
+  const match = message.match(/\[([^\]]+)\]/)
+  return match ? match[1] : ''
+}
+
+// 移除日志消息中的服务名称标签，返回纯净的日志内容
+const removeServiceTagFromMessage = (message) => {
+  if (!message) return ''
+  
+  return message.replace(/\[([^\]]+)\]\s*/, '')
+}
+
+// 根据服务名称获取标签类型（颜色）
+const getServiceTagType = (serviceName) => {
+  if (!serviceName) return ''
+  
+  // 根据服务名称的哈希值来分配颜色，确保同一服务始终使用相同颜色
+  const hash = serviceName.split('').reduce((acc, char) => {
+    return char.charCodeAt(0) + ((acc << 5) - acc)
+  }, 0)
+  
+  const colors = ['', 'success', 'info', 'warning', 'danger']
+  return colors[Math.abs(hash) % colors.length]
 }
 
 // 显示系统日志详情
@@ -3175,7 +3246,7 @@ const extractProxyInfo = (log) => {
   if (!log || !log.message) return null
   
   // 尝试从日志消息中提取代理请求信息
-  const proxyPattern = /Proxying\s+(\w+)\s+(.+?)\s+to\s+(.+)/
+  const proxyPattern = /\[([^\]]+)\]\s+Proxying\s+(\w+)\s+(.+?)\s+to\s+(.+)/
   const match = log.message.match(proxyPattern)
   
   if (match) {
@@ -3200,10 +3271,10 @@ const extractProxyInfo = (log) => {
     }
     
     return {
-      method: match[1],
-      path: match[2],
-      target: match[3],
-      serviceName,
+      method: match[2],
+      path: match[3],
+      target: match[4],
+      serviceName: match[1], // 从日志格式中直接提取服务名
       logId
     }
   }
@@ -5236,5 +5307,185 @@ html:not(.dark) .code-block .hljs-punctuation {
 .slide-leave-to {
   transform: translateY(10px);
   opacity: 0;
+}
+
+/* JSON查看器暗色主题优化 */
+.json-container {
+  border-radius: 4px;
+  overflow: hidden;
+}
+
+/* 全局JSON查看器样式强制覆盖 */
+:deep(.jv-dark) {
+  background: var(--el-bg-color-page) !important;
+  background-color: var(--el-bg-color-page) !important;
+}
+
+:deep(.jv-dark .jv-container) {
+  background: var(--el-bg-color-page) !important;
+  background-color: var(--el-bg-color-page) !important;
+}
+
+:deep(.jv-dark .jv-code) {
+  background: var(--el-bg-color-page) !important;
+  background-color: var(--el-bg-color-page) !important;
+}
+
+:deep(.jv-dark .jv-key) {
+  color: #67c23a !important;
+  font-weight: 600 !important;
+}
+
+:deep(.jv-dark .jv-item.jv-string) {
+  color: #f56c6c !important;
+  font-weight: 500 !important;
+}
+
+:deep(.jv-dark .jv-item.jv-number),
+:deep(.jv-dark .jv-item.jv-number-float),
+:deep(.jv-dark .jv-item.jv-number-integer) {
+  color: #e6a23c !important;
+  font-weight: 500 !important;
+}
+
+:deep(.jv-dark .jv-item.jv-boolean) {
+  color: #409eff !important;
+  font-weight: 500 !important;
+}
+
+:deep(.jv-dark .jv-item.jv-null),
+:deep(.jv-dark .jv-item.jv-undefined) {
+  color: #909399 !important;
+  font-style: italic !important;
+}
+
+:deep(.jv-dark .jv-item.jv-array),
+:deep(.jv-dark .jv-item.jv-object) {
+  color: #e4e7ed !important;
+}
+
+:deep(.jv-light .jv-key) {
+  color: #606266 !important;
+  font-weight: 600 !important;
+}
+
+:deep(.jv-light .jv-item.jv-string) {
+  color: #67c23a !important;
+  font-weight: 500 !important;
+}
+
+/* 强制覆盖JSON查看器的根背景 */
+:deep(.vue-json-viewer) {
+  background: var(--el-bg-color-page) !important;
+  background-color: var(--el-bg-color-page) !important;
+}
+
+:deep(.vue-json-viewer.jv-dark) {
+  background: var(--el-bg-color-page) !important;
+  background-color: var(--el-bg-color-page) !important;
+}
+
+/* 针对具体的JSON容器背景 */
+.json-container :deep(.jv-dark),
+.json-container :deep(.jv-light) {
+  background: transparent !important;
+  background-color: transparent !important;
+}
+
+/* 暗色主题下的JSON查看器样式优化 */
+html.dark .jv-dark,
+html.dark .json-container .jv-dark {
+  background: var(--el-bg-color-page) !important;
+  color: #e4e7ed !important;
+  font-family: 'Monaco', 'Menlo', 'Ubuntu Mono', monospace !important;
+}
+
+html.dark .jv-dark .jv-key,
+html.dark .json-container .jv-dark .jv-key {
+  color: #67c23a !important;
+  font-weight: 600 !important;
+}
+
+html.dark .jv-dark .jv-item.jv-string,
+html.dark .json-container .jv-dark .jv-item.jv-string {
+  color: #f56c6c !important;
+  font-weight: 500 !important;
+}
+
+html.dark .jv-dark .jv-item.jv-number,
+html.dark .jv-dark .jv-item.jv-number-float,
+html.dark .jv-dark .jv-item.jv-number-integer {
+  color: #e6a23c !important;
+  font-weight: 500 !important;
+}
+
+html.dark .jv-dark .jv-item.jv-boolean {
+  color: #409eff !important;
+  font-weight: 500 !important;
+}
+
+html.dark .jv-dark .jv-item.jv-null,
+html.dark .jv-dark .jv-item.jv-undefined {
+  color: #909399 !important;
+  font-style: italic !important;
+}
+
+html.dark .jv-dark .jv-item.jv-array,
+html.dark .jv-dark .jv-item.jv-object {
+  color: #e4e7ed !important;
+}
+
+html.dark .jv-dark .jv-ellipsis {
+  background-color: var(--el-color-info-light-9) !important;
+  color: var(--el-text-color-primary) !important;
+  border: 1px solid var(--el-border-color) !important;
+}
+
+html.dark .jv-dark .jv-button {
+  color: #409eff !important;
+}
+
+html.dark .jv-dark .jv-code .jv-toggle:before {
+  background: var(--el-color-info-light-9) !important;
+  color: var(--el-text-color-primary) !important;
+}
+
+html.dark .jv-dark .jv-code .jv-toggle:hover:before {
+  background: var(--el-color-primary-light-3) !important;
+  color: #ffffff !important;
+}
+
+/* 亮色主题下的JSON查看器样式优化 */
+html:not(.dark) .jv-light {
+  background: var(--el-bg-color-page) !important;
+  color: var(--el-text-color-primary) !important;
+}
+
+html:not(.dark) .jv-light .jv-key {
+  color: #606266 !important;
+  font-weight: 600 !important;
+}
+
+html:not(.dark) .jv-light .jv-item.jv-string {
+  color: #67c23a !important;
+  font-weight: 500 !important;
+}
+
+html:not(.dark) .jv-light .jv-item.jv-number,
+html:not(.dark) .jv-light .jv-item.jv-number-float,
+html:not(.dark) .jv-light .jv-item.jv-number-integer {
+  color: #e6a23c !important;
+  font-weight: 500 !important;
+}
+
+html:not(.dark) .jv-light .jv-item.jv-boolean {
+  color: #409eff !important;
+  font-weight: 500 !important;
+}
+
+html:not(.dark) .jv-light .jv-item.jv-null,
+html:not(.dark) .jv-light .jv-item.jv-undefined {
+  color: #c0c4cc !important;
+  font-style: italic !important;
 }
 </style> 

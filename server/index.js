@@ -1205,7 +1205,7 @@ app.get('/api/system/logs/:logId/request-details', async (req, res) => {
     }
     
     // 检查是否是代理请求日志
-    const proxyPattern = /Proxying\s+(\w+)\s+(.+?)\s+to\s+(.+)/;
+    const proxyPattern = /\[([^\]]+)\]\s+Proxying\s+(\w+)\s+(.+?)\s+to\s+(.+)/;
     const match = systemLog.message.match(proxyPattern);
     
     if (!match) {
@@ -1231,9 +1231,9 @@ app.get('/api/system/logs/:logId/request-details', async (req, res) => {
           // 检查是否包含请求详情的关键字段
           if (arg.method || arg.path || arg.status || arg.requestHeaders) {
             requestDetails = {
-              method: arg.method || match[1],
-              path: arg.path || match[2], 
-              target: arg.target || match[3],
+              method: arg.method || match[2],
+              path: arg.path || match[3], 
+              target: arg.target || match[4],
               status: arg.status || 200,
               duration: arg.duration || 0,
               timestamp: arg.timestamp || systemLog.timestamp,
@@ -1252,9 +1252,9 @@ app.get('/api/system/logs/:logId/request-details', async (req, res) => {
     // 如果没有找到详细信息，创建基本信息
     if (!requestDetails) {
       requestDetails = {
-        method: match[1],
-        path: match[2],
-        target: match[3],
+        method: match[2],
+        path: match[3],
+        target: match[4],
         status: 200,
         duration: 0,
         timestamp: systemLog.timestamp,
@@ -2112,7 +2112,7 @@ async function startProxyService(service, options = {}) {
       };
       
       // 记录到系统日志，包含详细的请求信息和UUID
-      addSystemLog('info', `Proxying ${req.method} ${req.url} to ${targets[activeTarget]}`, serviceName, requestDetails);
+      addSystemLog('info', `[${serviceName}] Proxying ${req.method} ${req.url} to ${targets[activeTarget]}`, serviceName, requestDetails);
       
       // 确保请求体被正确写入到代理请求中
       if (req.body && (req.method === 'POST' || req.method === 'PUT' || req.method === 'PATCH')) {
@@ -2190,7 +2190,7 @@ async function startProxyService(service, options = {}) {
         }
         
         // 记录响应日志，但不包含详细信息（因为详情已在请求日志中）
-        addSystemLog('info', `Proxy response ${proxyRes.statusCode} for ${req.method} ${req.url} (${duration}ms)`, serviceName, req.requestUuid);
+        addSystemLog('info', `[${serviceName}] Proxy response ${proxyRes.statusCode} for ${req.method} ${req.url} (${duration}ms)`, serviceName, req.requestUuid);
       });
     }
   };

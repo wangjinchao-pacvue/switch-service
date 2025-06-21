@@ -5,6 +5,8 @@ import 'element-plus/dist/index.css'
 import App from './App.vue'
 import router from './router'
 import { useAppStore } from './stores/app'
+import JsonViewer from 'vue-json-viewer'
+import 'vue-json-viewer/style.css'
 
 // 按需导入需要的图标
 import {
@@ -100,6 +102,7 @@ const pinia = createPinia()
 app.use(pinia)
 app.use(router)
 app.use(ElementPlus)
+app.use(JsonViewer)
 
 // 初始化主题
 const appStore = useAppStore()

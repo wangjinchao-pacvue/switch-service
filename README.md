@@ -10,6 +10,7 @@
 - 📝 **请求日志** - 记录和查看代理请求的详细日志
 - 🏷️ **标签管理** - 为服务添加标签进行分类管理
 - ⚙️ **端口管理** - 自动分配和管理端口范围
+- 📋 **系统日志** - 实时查看系统运行日志
 
 ## Docker 安装
 
@@ -19,6 +20,7 @@
 # 直接运行预构建镜像
 docker run -d \
   --name switch-service \
+  --restart unless-stopped \
   -p 3400:3400 \
   -p 4000-4100:4000-4100 \
   jcwangdocker/switch-service:1.0.0
@@ -26,16 +28,24 @@ docker run -d \
 
 ### 方式二：使用 Docker Compose
 
+```yaml
+# docker-compose.yml
+version: '3.8'
+services:
+  switch-service:
+    image: jcwangdocker/switch-service:1.0.0
+    container_name: switch-service
+    restart: unless-stopped
+    ports:
+      - "3400:3400"
+      - "4000-4100:4000-4100"
+    volumes:
+      - ./data:/app/server/data
+```
+
 ```bash
-# 克隆项目
-git clone https://github.com/wangjinchao-pacvue/switch-service.git
-cd switch-service-web
-
-# 启动服务（包含可选的Eureka服务器）
+# 启动服务
 docker-compose up -d
-
-# 仅启动Switch Service
-docker-compose up -d switch-service
 ```
 
 ### 方式三：本地构建
@@ -45,26 +55,23 @@ docker-compose up -d switch-service
 git clone https://github.com/wangjinchao-pacvue/switch-service.git
 cd switch-service-web
 
-# 2. 使用构建脚本
-bash build_and_push.sh [tag] [repo]
-
-# 3. 或手动构建
+# 2. 构建并运行
 docker build -t switch-service-web .
-
-# 4. 运行容器
 docker run -d \
   --name switch-service \
+  --restart unless-stopped \
   -p 3400:3400 \
   -p 4000-4100:4000-4100 \
   switch-service-web
 ```
 
-### 高级配置
+## 高级配置
 
-#### 自定义端口范围
+### 自定义端口范围
 ```bash
 docker run -d \
   --name switch-service \
+  --restart unless-stopped \
   -p 3400:3400 \
   -p 5000-5200:5000-5200 \
   -e PORT_RANGE_START=5000 \
@@ -72,41 +79,20 @@ docker run -d \
   jcwangdocker/switch-service:1.0.0
 ```
 
-#### 数据持久化
+### 数据持久化
 ```bash
 docker run -d \
   --name switch-service \
+  --restart unless-stopped \
   -p 3400:3400 \
   -p 4000-4100:4000-4100 \
   -v $(pwd)/data:/app/server/data \
   jcwangdocker/switch-service:1.0.0
 ```
 
-#### 查看容器日志
-```bash
-# 查看实时日志
-docker logs -f switch-service
-
-# 查看最近100行日志
-docker logs --tail 100 switch-service
-```
-
-### 访问应用
+## 访问应用
 
 打开浏览器访问：`http://localhost:3400`
-
-### 构建和推送镜像
-
-如果您需要构建自己的镜像版本：
-
-```bash
-# 使用提供的脚本（需要Docker Hub账号）
-bash build_and_push.sh 1.0.0 your-dockerhub-username/switch-service
-
-# 手动构建
-docker build -t your-repo/switch-service:tag .
-docker push your-repo/switch-service:tag
-```
 
 ## 环境变量配置
 
@@ -119,35 +105,29 @@ docker push your-repo/switch-service:tag
 ## 使用说明
 
 ### 1. 配置Eureka连接
-
-在应用界面中配置Eureka服务器地址：
-- **主机**: localhost（或Eureka服务器IP）
-- **端口**: 8761（默认Eureka端口）
-- **服务路径**: /eureka/apps
+在应用界面中配置Eureka服务器地址
 
 ### 2. 创建代理服务
-
-1. 点击"创建代理服务"按钮
-2. 填写服务名称
-3. 配置目标服务URL（支持多个环境）
-4. 点击创建
+点击"创建代理服务"按钮，填写配置信息
 
 ### 3. 管理代理服务
-
 - **启动/停止**: 控制代理服务运行状态
 - **切换目标**: 在不同环境间切换
-- **查看日志**: 实时查看代理请求日志
+- **查看日志**: 实时查看代理请求和系统日志
 - **服务监控**: 查看心跳状态和服务健康度
+
+## 重启策略说明
+
+- `--restart unless-stopped`: 容器会自动重启，除非手动停止
+- 系统重启后容器会自动启动
+- 手动停止容器后不会自动重启
 
 ## 注意事项
 
 - 确保Docker容器的端口范围映射与环境变量配置一致
 - 代理服务会自动注册到Eureka服务注册中心
-- 数据存储在容器内的SQLite数据库中，建议挂载数据卷持久化
-
-## 开发模式
-
-如需本地开发，请参考项目中的开发配置文件。
+- 建议挂载数据卷持久化数据
+- **重要**: 每次代码变更需要手动重启服务
 
 ## 技术栈
 

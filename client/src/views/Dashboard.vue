@@ -1580,6 +1580,100 @@
       </div>
     </el-dialog>
 
+    <!-- 首次启动配置引导弹窗 -->
+    <el-dialog
+      v-model="showFirstTimeDialog"
+      title="🎉 欢迎使用 Switch Service"
+      width="600px"
+      :close-on-click-modal="false"
+      :close-on-press-escape="false"
+      :show-close="false"
+    >
+      <div class="first-time-setup">
+        <div class="welcome-text">
+          <el-alert
+            title="首次启动配置"
+            description="请配置以下信息以确保服务正常运行。这些配置可以在后续的系统设置中修改。"
+            type="info"
+            :closable="false"
+            style="margin-bottom: 20px;"
+          />
+        </div>
+        
+        <el-form :model="firstTimeForm" label-width="120px">
+          <el-form-item label="Eureka主机">
+            <el-input 
+              v-model="firstTimeForm.eurekaHost" 
+              placeholder="容器环境推荐使用 host.docker.internal"
+            >
+              <template #suffix>
+                <el-tooltip 
+                  content="Eureka服务器地址。容器环境下使用 host.docker.internal 访问宿主机服务"
+                  placement="top"
+                >
+                  <el-icon><InfoFilled /></el-icon>
+                </el-tooltip>
+              </template>
+            </el-input>
+            <div class="form-help-text">
+              <small>
+                • 容器环境：<code>host.docker.internal</code><br>
+                • 本地环境：<code>localhost</code> 或 <code>127.0.0.1</code><br>
+                • 远程服务器：填写实际IP地址
+              </small>
+            </div>
+          </el-form-item>
+          
+          <el-form-item label="Eureka端口">
+            <el-input-number 
+              v-model="firstTimeForm.eurekaPort" 
+              :min="1" 
+              :max="65535" 
+              style="width: 100%;"
+            />
+            <div class="form-help-text">
+              <small>默认端口：8761</small>
+            </div>
+          </el-form-item>
+          
+          <el-form-item label="本机IP地址">
+            <el-input 
+              v-model="firstTimeForm.localIP" 
+              placeholder="用户访问代理服务的地址"
+            >
+              <template #suffix>
+                <el-tooltip 
+                  content="用户访问代理服务时使用的IP地址。通常使用 127.0.0.1"
+                  placement="top"
+                >
+                  <el-icon><InfoFilled /></el-icon>
+                </el-tooltip>
+              </template>
+            </el-input>
+            <div class="form-help-text">
+              <small>
+                • 本地访问：<code>127.0.0.1</code>（推荐）<br>
+                • 局域网访问：填写本机实际IP地址
+              </small>
+            </div>
+          </el-form-item>
+        </el-form>
+      </div>
+      
+      <template #footer>
+        <div class="dialog-footer">
+          <el-button 
+            type="primary" 
+            @click="completeFirstTimeSetup"
+            :loading="firstTimeLoading"
+            size="large"
+          >
+            <el-icon><Setting /></el-icon>
+            完成配置
+          </el-button>
+        </div>
+      </template>
+    </el-dialog>
 
   </div>
 </template>
@@ -1593,7 +1687,7 @@ import { List, Plus, Search, Connection, WarningFilled, Refresh, Setting, Link, 
 const appStore = useAppStore()
 
 const eurekaConfig = reactive({
-  host: 'localhost',
+  host: 'host.docker.internal',
   port: 8761,
   servicePath: '/eureka/apps',
   heartbeatInterval: 30
@@ -1633,9 +1727,18 @@ const monitoringLoading = ref(false)
 
 // 本机IP配置
 const localIPConfig = reactive({
-  localIP: ''
+  localIP: '127.0.0.1'
 })
 const localIPLoading = ref(false)
+
+// 首次启动引导
+const showFirstTimeDialog = ref(false)
+const firstTimeLoading = ref(false)
+const firstTimeForm = reactive({
+  eurekaHost: 'host.docker.internal',
+  eurekaPort: 8761,
+  localIP: '127.0.0.1'
+})
 
 // 端口使用统计
 const portStats = ref({
@@ -1861,6 +1964,69 @@ const getEurekaAvailabilityText = () => {
   return eurekaStatus.value.isAvailable ? 'Eureka可用' : 'Eureka不可用'
 }
 
+// 检查是否是首次启动
+const checkFirstTime = async () => {
+  try {
+    const response = await fetch('/api/config/first-time')
+    const data = await response.json()
+    if (data.success && data.isFirstTime) {
+      showFirstTimeDialog.value = true
+    }
+  } catch (error) {
+    console.error('检查首次启动状态失败:', error)
+  }
+}
+
+// 完成首次配置
+const completeFirstTimeSetup = async () => {
+  if (firstTimeLoading.value) return
+  
+  firstTimeLoading.value = true
+  
+  try {
+    const response = await fetch('/api/config/first-time-complete', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        eurekaConfig: {
+          host: firstTimeForm.eurekaHost,
+          port: firstTimeForm.eurekaPort,
+          servicePath: '/eureka/apps',
+          heartbeatInterval: 30
+        },
+        localIPConfig: {
+          localIP: firstTimeForm.localIP
+        }
+      })
+    })
+    
+    const data = await response.json()
+    if (data.success) {
+      ElMessage.success('初始配置完成！')
+      showFirstTimeDialog.value = false
+      
+      // 更新本地配置
+      Object.assign(eurekaConfig, {
+        host: firstTimeForm.eurekaHost,
+        port: firstTimeForm.eurekaPort,
+        servicePath: '/eureka/apps',
+        heartbeatInterval: 30
+      })
+      localIPConfig.localIP = firstTimeForm.localIP
+      
+      // 重新获取配置
+      await appStore.fetchConfig()
+      await fetchLocalIPConfig()
+    } else {
+      ElMessage.error(data.error || '配置失败')
+    }
+  } catch (error) {
+    ElMessage.error('配置失败: ' + error.message)
+  } finally {
+    firstTimeLoading.value = false
+  }
+}
+
 // 本机IP配置相关方法
 const fetchLocalIPConfig = async () => {
   try {
@@ -1872,8 +2038,8 @@ const fetchLocalIPConfig = async () => {
       if (typeof configLocalIP === 'string' && configLocalIP.trim()) {
         localIPConfig.localIP = configLocalIP
       } else {
-        localIPConfig.localIP = ''
-        console.warn('本机IP配置格式异常，已重置为空')
+        localIPConfig.localIP = '127.0.0.1'
+        console.warn('本机IP配置格式异常，已重置为默认值')
       }
     }
   } catch (error) {
@@ -3817,6 +3983,9 @@ const onCategoryChange = () => {
 }
 
 onMounted(async () => {
+  // 首先检查是否是首次启动
+  await checkFirstTime()
+  
   await appStore.fetchConfig()
   Object.assign(eurekaConfig, appStore.config.eureka)
   
@@ -5487,5 +5656,28 @@ html:not(.dark) .jv-light .jv-item.jv-null,
 html:not(.dark) .jv-light .jv-item.jv-undefined {
   color: #c0c4cc !important;
   font-style: italic !important;
+}
+
+/* 首次配置弹窗样式 */
+.first-time-setup {
+  padding: 10px 0;
+}
+
+.form-help-text {
+  margin-top: 5px;
+  color: var(--el-text-color-secondary);
+  line-height: 1.4;
+}
+
+.form-help-text code {
+  background: var(--el-color-info-light-9);
+  padding: 2px 4px;
+  border-radius: 3px;
+  font-family: 'Monaco', 'Menlo', 'Ubuntu Mono', monospace;
+  font-size: 12px;
+}
+
+.dialog-footer {
+  text-align: center;
 }
 </style> 

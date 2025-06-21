@@ -5,7 +5,7 @@ export const useAppStore = defineStore('app', {
   state: () => ({
     config: {
       eureka: {
-        host: 'localhost',
+        host: 'host.docker.internal',
         port: 8761,
         servicePath: '/eureka/apps'
       },

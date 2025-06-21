@@ -21,7 +21,7 @@ app.use(express.json());
 // 存储配置和状态
 let config = {
   eureka: {
-    host: 'localhost',
+    host: 'host.docker.internal', // 容器环境下访问宿主机服务
     port: 8761,
     servicePath: '/eureka/apps',
     heartbeatInterval: 30 // 心跳间隔（秒）
@@ -598,6 +598,63 @@ app.get('/api/eureka/status', (req, res) => {
     isAvailable: isEurekaAvailable,
     config: config.eureka
   });
+});
+
+// 检查是否是首次启动
+app.get('/api/config/first-time', async (req, res) => {
+  try {
+    // 检查是否已有配置标记
+    const firstTimeConfig = await database.getConfig('first_time_setup');
+    const isFirstTime = !firstTimeConfig;
+    
+    res.json({ 
+      success: true, 
+      isFirstTime: isFirstTime
+    });
+  } catch (error) {
+    console.error('检查首次启动状态失败:', error);
+    res.status(500).json({ 
+      success: false, 
+      error: error.message 
+    });
+  }
+});
+
+// 完成首次配置
+app.post('/api/config/first-time-complete', async (req, res) => {
+  try {
+    const { eurekaConfig, localIPConfig } = req.body;
+    
+    // 保存Eureka配置
+    if (eurekaConfig) {
+      await database.setEurekaConfig(eurekaConfig);
+      config.eureka = { ...config.eureka, ...eurekaConfig };
+    }
+    
+    // 保存本机IP配置
+    if (localIPConfig) {
+      await database.setLocalIPConfig(localIPConfig);
+    }
+    
+    // 标记首次配置已完成
+    await database.setConfig('first_time_setup', {
+      completed: true,
+      completedAt: new Date().toISOString()
+    });
+    
+    console.log('首次配置完成');
+    
+    res.json({ 
+      success: true, 
+      message: '首次配置完成'
+    });
+  } catch (error) {
+    console.error('完成首次配置失败:', error);
+    res.status(500).json({ 
+      success: false, 
+      error: error.message 
+    });
+  }
 });
 
 // 获取本地网络信息（调试用）
@@ -1948,55 +2005,8 @@ async function getLocalIP() {
     return process.env.HOST_IP;
   }
   
-  const interfaces = os.networkInterfaces();
-  
-  // 3. 在容器环境中，优先查找以下网络接口
-  const preferredInterfaces = ['eth0', 'ens3', 'ens4', 'ens5', 'enp0s3', 'enp0s8'];
-  
-  // 首先尝试查找首选的网络接口
-  for (const interfaceName of preferredInterfaces) {
-    const networkInterface = interfaces[interfaceName];
-    if (networkInterface) {
-      for (const iface of networkInterface) {
-        if (iface.family === 'IPv4' && !iface.internal) {
-          console.log(`使用首选网络接口 ${interfaceName} 的IP: ${iface.address}`);
-          return iface.address;
-        }
-      }
-    }
-  }
-  
-  // 4. 如果没有找到首选接口，则查找所有非内部IPv4地址
-  // 排除一些已知的内部网络接口
-  const excludeInterfaces = ['lo', 'lo0', 'docker0', 'virbr0'];
-  
-  for (const name of Object.keys(interfaces)) {
-    if (excludeInterfaces.includes(name)) {
-      continue;
-    }
-    
-    for (const iface of interfaces[name]) {
-      if (iface.family === 'IPv4' && !iface.internal) {
-        console.log(`使用备选网络接口 ${name} 的IP: ${iface.address}`);
-        return iface.address;
-      }
-    }
-  }
-  
-  // 5. 最后的fallback：查看Docker bridge网络（通常是172.17.0.x）
-  for (const name of Object.keys(interfaces)) {
-    for (const iface of interfaces[name]) {
-      if (iface.family === 'IPv4' && !iface.internal && 
-          (iface.address.startsWith('172.') || iface.address.startsWith('192.168.'))) {
-        console.log(`使用Docker/私有网络接口 ${name} 的IP: ${iface.address}`);
-        return iface.address;
-      }
-    }
-  }
-  
-  // 6. 如果还是没有找到，返回localhost作为最终fallback
-  console.warn('未找到可用的外部IP地址，使用 127.0.0.1 作为fallback');
-  console.warn('建议在系统配置中设置本机IP地址');
+  // 3. 容器环境下默认使用127.0.0.1（用户本地访问地址）
+  console.log('使用默认本机IP: 127.0.0.1（用户本地访问地址）');
   return '127.0.0.1';
 }
 

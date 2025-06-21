@@ -47,6 +47,27 @@ jobs:
           exit 1
         fi
         
+    - name: Check if this is the latest release
+      id: latest-check
+      run: |
+        # 获取所有release分支并提取版本号
+        git fetch origin
+        all_versions=$(git branch -r | grep -E 'origin/release_' | sed 's/.*release_//' | sort -V)
+        current_version="${{ steps.version.outputs.version }}"
+        latest_version=$(echo "$all_versions" | tail -1)
+        
+        echo "Current version: $current_version"
+        echo "All versions: $all_versions"
+        echo "Latest version: $latest_version"
+        
+        if [ "$current_version" = "$latest_version" ]; then
+          echo "This is the latest release version"
+          echo "is_latest=true" >> $GITHUB_OUTPUT
+        else
+          echo "This is not the latest release version"
+          echo "is_latest=false" >> $GITHUB_OUTPUT
+        fi
+        
     - name: Create and push tag
       if: github.event_name != 'pull_request'
       run: |
@@ -72,7 +93,7 @@ jobs:
           type=semver,pattern={{version}}
           type=semver,pattern={{major}}.{{minor}}
           type=raw,value=${{ steps.version.outputs.version }}
-          type=raw,value=latest,enable=${{ contains(github.ref, 'release_1.0.0') }}
+          type=raw,value=latest,enable=${{ steps.latest-check.outputs.is_latest == 'true' }}
           
     - name: Build and push Docker image
       uses: docker/build-push-action@v5

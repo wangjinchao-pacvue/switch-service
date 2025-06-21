@@ -374,31 +374,16 @@ const environments = computed(() => {
   
   const envs = []
   
-  // 添加代理服务配置的环境
-  if (service.targetUrl) {
-    envs.push({
-      key: 'target',
-      label: `目标地址 ${service.isRunning ? '(当前使用)' : ''}`,
-      url: service.targetUrl,
-      isActive: service.isRunning
-    })
-  }
-  
-  if (service.testUrl) {
-    envs.push({
-      key: 'test',
-      label: `测试地址`,
-      url: service.testUrl,
-      isActive: false
-    })
-  }
-  
-  if (service.devUrl) {
-    envs.push({
-      key: 'dev',
-      label: `开发地址`,
-      url: service.devUrl,
-      isActive: false
+  // 从 targets 对象中获取所有环境配置
+  if (service.targets && typeof service.targets === 'object') {
+    Object.entries(service.targets).forEach(([envName, envUrl]) => {
+      const isActive = service.isRunning && service.activeTarget === envName
+      envs.push({
+        key: envName,
+        label: `${envName} ${isActive ? '(当前使用)' : ''}`,
+        url: envUrl,
+        isActive: isActive
+      })
     })
   }
   

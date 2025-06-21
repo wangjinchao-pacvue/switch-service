@@ -25,9 +25,11 @@ fi
 echo "⬇️  拉取最新镜像: ${IMAGE_NAME}"
 docker pull ${IMAGE_NAME}
 
-# 创建数据目录
+# 创建数据目录并设置权限
 echo "📁 创建数据目录..."
 mkdir -p ./data
+chmod 755 ./data
+echo "📁 数据目录权限设置完成"
 
 # 运行新容器
 echo "🔄 启动新容器: ${CONTAINER_NAME}"

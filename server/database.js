@@ -14,16 +14,43 @@ class Database {
       // 确保data目录存在
       const fs = require('fs');
       const dataDir = path.dirname(DB_PATH);
-      if (!fs.existsSync(dataDir)) {
-        fs.mkdirSync(dataDir, { recursive: true });
+      
+      try {
+        if (!fs.existsSync(dataDir)) {
+          console.log('创建数据目录:', dataDir);
+          fs.mkdirSync(dataDir, { recursive: true });
+        }
+        
+        // 检查目录权限
+        try {
+          fs.accessSync(dataDir, fs.constants.W_OK);
+          console.log('数据目录权限检查通过:', dataDir);
+        } catch (accessErr) {
+          console.error('数据目录权限不足:', accessErr);
+          console.log('尝试修复权限...');
+          try {
+            fs.chmodSync(dataDir, 0o755);
+            console.log('权限修复成功');
+          } catch (chmodErr) {
+            console.error('权限修复失败:', chmodErr);
+          }
+        }
+      } catch (dirErr) {
+        console.error('创建数据目录失败:', dirErr);
+        reject(dirErr);
+        return;
       }
 
       this.db = new sqlite3.Database(DB_PATH, (err) => {
         if (err) {
           console.error('数据库连接失败:', err);
+          console.error('数据库路径:', DB_PATH);
+          console.error('当前工作目录:', process.cwd());
+          console.error('当前用户ID:', process.getuid ? process.getuid() : 'N/A');
+          console.error('当前组ID:', process.getgid ? process.getgid() : 'N/A');
           reject(err);
         } else {
-          console.log('SQLite数据库连接成功');
+          console.log('SQLite数据库连接成功:', DB_PATH);
           this.createTables().then(resolve).catch(reject);
         }
       });

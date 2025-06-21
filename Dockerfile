@@ -46,11 +46,10 @@ COPY --from=builder /app/server/ ./server/
 COPY --from=builder /app/client/dist/ ./client/dist/
 COPY --from=builder /app/ecosystem.config.js ./
 
-# 创建数据目录
-RUN mkdir -p ./server/data
-
-# 更改文件所有者
-RUN chown -R nextjs:nodejs /app
+# 创建数据目录并设置权限
+RUN mkdir -p ./server/data && \
+    chown -R nextjs:nodejs /app && \
+    chmod -R 755 /app/server/data
 
 # 切换到非root用户
 USER nextjs

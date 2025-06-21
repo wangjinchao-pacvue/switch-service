@@ -1,0 +1,65 @@
+name: Sync Workflow to Release Branches
+
+on:
+  push:
+    branches: [ master ]
+    paths:
+      - '.github/workflows/docker-build-push.yml'
+
+jobs:
+  sync-workflow:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      
+    steps:
+    - name: Checkout repository
+      uses: actions/checkout@v4
+      with:
+        fetch-depth: 0  # 获取所有分支历史
+        
+    - name: Configure Git
+      run: |
+        git config user.name "github-actions[bot]"
+        git config user.email "github-actions[bot]@users.noreply.github.com"
+        
+    - name: Get all release branches
+      id: get-branches
+      run: |
+        # 获取所有远程release分支
+        release_branches=$(git branch -r | grep -E 'origin/release/' | sed 's/origin\///' | tr '\n' ' ')
+        echo "Found release branches: $release_branches"
+        echo "branches=$release_branches" >> $GITHUB_OUTPUT
+        
+    - name: Sync workflow to release branches
+      if: steps.get-branches.outputs.branches != ''
+      run: |
+        workflow_file=".github/workflows/docker-build-push.yml"
+        
+        for branch in ${{ steps.get-branches.outputs.branches }}; do
+          echo "Syncing workflow to branch: $branch"
+          
+          # 切换到目标分支
+          git checkout "$branch" || {
+            echo "Failed to checkout branch $branch, skipping..."
+            continue
+          }
+          
+          # 从master分支复制工作流文件
+          git checkout master -- "$workflow_file"
+          
+          # 检查是否有变更
+          if git diff --quiet HEAD -- "$workflow_file"; then
+            echo "No changes needed for branch $branch"
+          else
+            echo "Committing changes to branch $branch"
+            git add "$workflow_file"
+            git commit -m "sync: 从master分支同步工作流文件更新"
+            git push origin "$branch"
+          fi
+        done
+        
+    - name: Summary
+      run: |
+        echo "Workflow sync completed!"
+        echo "Synced docker-build-push.yml to all release branches" 

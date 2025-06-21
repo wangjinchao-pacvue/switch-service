@@ -1005,7 +1005,7 @@ class Database {
     });
     
     return result;
-  },
+  }
 
   saveDebugApis(serviceName, apis) {
     const deleteStmt = this.db.prepare('DELETE FROM debug_apis WHERE service_name = ?');
@@ -1024,7 +1024,7 @@ class Database {
     
     transaction();
     console.log(`保存服务 ${serviceName} 的调试接口配置，共 ${apis?.length || 0} 个接口`);
-  },
+  }
 
   deleteDebugApi(serviceName, apiId) {
     // 先获取当前数据
@@ -1051,7 +1051,7 @@ class Database {
       
       console.log(`删除服务 ${serviceName} 的调试接口 (ID: ${apiId})`);
     }
-  },
+  }
 
   close() {
     if (this.db) {

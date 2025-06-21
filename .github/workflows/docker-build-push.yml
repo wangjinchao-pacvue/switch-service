@@ -72,7 +72,6 @@ jobs:
           type=semver,pattern={{version}}
           type=semver,pattern={{major}}.{{minor}}
           type=raw,value=${{ steps.version.outputs.version }}
-          type=raw,value=v${{ steps.version.outputs.version }}
           type=raw,value=latest,enable=${{ contains(github.ref, 'release_1.0.0') }}
           
     - name: Build and push Docker image

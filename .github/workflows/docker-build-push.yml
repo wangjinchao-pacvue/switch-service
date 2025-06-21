@@ -13,6 +13,9 @@ env:
 jobs:
   build-and-push:
     runs-on: ubuntu-latest
+    permissions:
+      contents: write  # 允许创建和推送标签
+      packages: write  # 允许推送Docker镜像
     
     steps:
     - name: Checkout code
@@ -52,13 +55,12 @@ jobs:
         
         # 检查标签是否已存在
         if git rev-parse "v${{ steps.version.outputs.version }}" >/dev/null 2>&1; then
-          echo "Tag v${{ steps.version.outputs.version }} already exists, updating it"
-          git tag -d "v${{ steps.version.outputs.version }}" || true
-          git push origin ":refs/tags/v${{ steps.version.outputs.version }}" || true
+          echo "Tag v${{ steps.version.outputs.version }} already exists, skipping tag creation"
+        else
+          echo "Creating new tag v${{ steps.version.outputs.version }}"
+          git tag -a "v${{ steps.version.outputs.version }}" -m "Release version v${{ steps.version.outputs.version }} from branch ${GITHUB_REF#refs/heads/}"
+          git push origin "v${{ steps.version.outputs.version }}"
         fi
-        
-        git tag -a "v${{ steps.version.outputs.version }}" -m "Release version v${{ steps.version.outputs.version }} from branch ${GITHUB_REF#refs/heads/}"
-        git push origin "v${{ steps.version.outputs.version }}"
         
     - name: Extract metadata
       id: meta
@@ -70,7 +72,6 @@ jobs:
           type=semver,pattern={{version}}
           type=semver,pattern={{major}}.{{minor}}
           type=raw,value=${{ steps.version.outputs.version }}
-          type=raw,value=v${{ steps.version.outputs.version }}
           type=raw,value=latest,enable=${{ contains(github.ref, 'release_1.0.0') }}
           
     - name: Build and push Docker image

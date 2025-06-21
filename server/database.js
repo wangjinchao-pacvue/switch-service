@@ -207,19 +207,19 @@ class Database {
   // 创建代理服务
   async createProxyService(serviceConfig) {
     const id = uuidv4();
-    const { serviceName, port, targets, activeTarget } = serviceConfig;
+    const { serviceName, port, targets, activeTarget, tags = [] } = serviceConfig;
     
     return new Promise((resolve, reject) => {
       const sql = `
-        INSERT INTO proxy_services (id, service_name, port, targets, active_target, is_running)
-        VALUES (?, ?, ?, ?, ?, 0)
+        INSERT INTO proxy_services (id, service_name, port, targets, active_target, is_running, tags)
+        VALUES (?, ?, ?, ?, ?, 0, ?)
       `;
       
-      this.db.run(sql, [id, serviceName, port, JSON.stringify(targets), activeTarget], function(err) {
+      this.db.run(sql, [id, serviceName, port, JSON.stringify(targets), activeTarget, JSON.stringify(tags)], function(err) {
         if (err) {
           reject(err);
         } else {
-          resolve({ id, ...serviceConfig, isRunning: false });
+          resolve({ id, ...serviceConfig, isRunning: false, tags });
         }
       });
     });

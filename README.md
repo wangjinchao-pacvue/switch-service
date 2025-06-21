@@ -14,7 +14,18 @@
 
 ## Docker 安装
 
-### 方式一：使用预构建镜像（推荐）
+### 方式一：使用部署脚本（推荐）
+
+```bash
+# 下载部署脚本
+curl -o deploy.sh https://raw.githubusercontent.com/wangjinchao-pacvue/switch-service/master/deploy.sh
+chmod +x deploy.sh
+
+# 运行部署脚本（自动拉取最新镜像并创建容器）
+./deploy.sh
+```
+
+### 方式二：手动运行预构建镜像
 
 ```bash
 # 直接运行预构建镜像
@@ -23,7 +34,7 @@ docker run -d \
   --restart unless-stopped \
   -p 3400:3400 \
   -p 4000-4100:4000-4100 \
-  jcwangdocker/switch-service:1.0.0
+  jcwangdocker/switch-service:latest
 ```
 
 ### 方式二：使用 Docker Compose

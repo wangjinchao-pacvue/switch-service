@@ -17,18 +17,28 @@
 ### 方式一：使用部署脚本（推荐）
 
 ```bash
-# 下载部署脚本
-curl -o deploy.sh https://raw.githubusercontent.com/wangjinchao-pacvue/switch-service/master/deploy.sh
-chmod +x deploy.sh
+# 一键部署（下载脚本并执行）
+curl -o deploy.sh https://raw.githubusercontent.com/wangjinchao-pacvue/switch-service/master/deploy.sh && chmod +x deploy.sh && ./deploy.sh
 
-# 运行部署脚本（自动拉取最新镜像并创建容器）
-./deploy.sh
+# 或分步执行：
+# 1. 下载部署脚本
+# curl -o deploy.sh https://raw.githubusercontent.com/wangjinchao-pacvue/switch-service/master/deploy.sh
+# 2. 添加执行权限
+# chmod +x deploy.sh  
+# 3. 运行部署脚本
+# ./deploy.sh
 ```
+
+**部署脚本功能：**
+- ✅ 自动拉取最新镜像
+- ✅ 智能管理容器（停止旧容器，创建新容器）
+- ✅ 自动配置端口映射和数据持久化
+- ✅ 健康检查和状态验证
 
 ### 方式二：手动运行预构建镜像
 
 ```bash
-# 直接运行预构建镜像
+# 直接运行预构建镜像（数据存储在容器内部）
 docker run -d \
   --name switch-service \
   --restart unless-stopped \
@@ -37,14 +47,14 @@ docker run -d \
   jcwangdocker/switch-service:latest
 ```
 
-### 方式二：使用 Docker Compose
+### 方式三：使用 Docker Compose
 
 ```yaml
 # docker-compose.yml
 version: '3.8'
 services:
   switch-service:
-    image: jcwangdocker/switch-service:1.0.0
+    image: jcwangdocker/switch-service:latest
     container_name: switch-service
     restart: unless-stopped
     ports:
@@ -59,7 +69,7 @@ services:
 docker-compose up -d
 ```
 
-### 方式三：本地构建
+### 方式四：本地构建
 
 ```bash
 # 1. 克隆项目
@@ -73,7 +83,36 @@ docker run -d \
   --restart unless-stopped \
   -p 3400:3400 \
   -p 4000-4100:4000-4100 \
+  -v $(pwd)/data:/app/server/data \
   switch-service-web
+```
+
+## 更新部署
+
+使用部署脚本可以轻松更新到最新版本：
+
+```bash
+# 更新到最新版本
+./deploy.sh
+```
+
+或手动更新：
+
+```bash
+# 停止并删除旧容器
+docker stop switch-service && docker rm switch-service
+
+# 拉取最新镜像
+docker pull jcwangdocker/switch-service:latest
+
+# 重新运行容器
+docker run -d \
+  --name switch-service \
+  --restart unless-stopped \
+  -p 3400:3400 \
+  -p 4000-4100:4000-4100 \
+  -v $(pwd)/data:/app/server/data \
+  jcwangdocker/switch-service:latest
 ```
 
 ## 高级配置
@@ -87,18 +126,8 @@ docker run -d \
   -p 5000-5200:5000-5200 \
   -e PORT_RANGE_START=5000 \
   -e PORT_RANGE_END=5200 \
-  jcwangdocker/switch-service:1.0.0
-```
-
-### 数据持久化
-```bash
-docker run -d \
-  --name switch-service \
-  --restart unless-stopped \
-  -p 3400:3400 \
-  -p 4000-4100:4000-4100 \
   -v $(pwd)/data:/app/server/data \
-  jcwangdocker/switch-service:1.0.0
+  jcwangdocker/switch-service:latest
 ```
 
 ## 访问应用
@@ -127,6 +156,25 @@ docker run -d \
 - **查看日志**: 实时查看代理请求和系统日志
 - **服务监控**: 查看心跳状态和服务健康度
 
+## 常用命令
+
+```bash
+# 查看容器状态
+docker ps --filter name=switch-service
+
+# 查看实时日志
+docker logs -f switch-service
+
+# 重启容器
+docker restart switch-service
+
+# 停止容器
+docker stop switch-service
+
+# 进入容器
+docker exec -it switch-service sh
+```
+
 ## 重启策略说明
 
 - `--restart unless-stopped`: 容器会自动重启，除非手动停止
@@ -138,7 +186,8 @@ docker run -d \
 - 确保Docker容器的端口范围映射与环境变量配置一致
 - 代理服务会自动注册到Eureka服务注册中心
 - 建议挂载数据卷持久化数据
-- **重要**: 每次代码变更需要手动重启服务
+- **重要**: 每次代码变更会通过GitHub Actions自动构建新镜像
+- 使用部署脚本可以快速更新到最新版本
 
 ## 技术栈
 
@@ -146,4 +195,5 @@ docker run -d \
 - **前端**: Vue 3 + Element Plus
 - **数据库**: SQLite
 - **代理**: http-proxy-middleware
-- **服务注册**: Eureka Client 
+- **服务注册**: Eureka Client
+- **CI/CD**: GitHub Actions 

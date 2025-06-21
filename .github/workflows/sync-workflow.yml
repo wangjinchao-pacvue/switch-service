@@ -5,6 +5,7 @@ on:
     branches: [ master ]
     paths:
       - '.github/workflows/docker-build-push.yml'
+      - '.github/workflows/protect-workflow.yml'
 
 jobs:
   sync-workflow:
@@ -26,15 +27,15 @@ jobs:
     - name: Get all release branches
       id: get-branches
       run: |
-        # 获取所有远程release分支
-        release_branches=$(git branch -r | grep -E 'origin/release/' | sed 's/origin\///' | tr '\n' ' ')
+        # 获取所有远程release分支 (匹配 release_x.x.x 模式)
+        release_branches=$(git branch -r | grep -E 'origin/release_' | sed 's/origin\///' | tr '\n' ' ')
         echo "Found release branches: $release_branches"
         echo "branches=$release_branches" >> $GITHUB_OUTPUT
         
     - name: Sync workflow to release branches
       if: steps.get-branches.outputs.branches != ''
       run: |
-        workflow_file=".github/workflows/docker-build-push.yml"
+        workflow_files=".github/workflows/docker-build-push.yml .github/workflows/protect-workflow.yml"
         
         for branch in ${{ steps.get-branches.outputs.branches }}; do
           echo "Syncing workflow to branch: $branch"
@@ -46,14 +47,14 @@ jobs:
           }
           
           # 从master分支复制工作流文件
-          git checkout master -- "$workflow_file"
+          git checkout master -- $workflow_files
           
           # 检查是否有变更
-          if git diff --quiet HEAD -- "$workflow_file"; then
+          if git diff --quiet HEAD -- $workflow_files; then
             echo "No changes needed for branch $branch"
           else
             echo "Committing changes to branch $branch"
-            git add "$workflow_file"
+            git add $workflow_files
             git commit -m "sync: 从master分支同步工作流文件更新"
             git push origin "$branch"
           fi
@@ -62,4 +63,4 @@ jobs:
     - name: Summary
       run: |
         echo "Workflow sync completed!"
-        echo "Synced docker-build-push.yml to all release branches" 
+        echo "Synced docker-build-push.yml and protect-workflow.yml to all release branches" 

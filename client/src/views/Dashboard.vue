@@ -3072,7 +3072,9 @@ const toggleHeartbeatCollapse = () => {
 }
 
 const connectLogWebSocket = (serviceName) => {
-  const wsUrl = `ws://${window.location.hostname}:3400`
+  // 开发环境使用5175，生产环境使用当前页面端口
+  const wsPort = window.location.hostname === 'localhost' ? '5175' : window.location.port || '3400'
+  const wsUrl = `ws://${window.location.hostname}:${wsPort}`
   logWebsocket = new WebSocket(wsUrl)
   
   logWebsocket.onopen = () => {
@@ -3659,7 +3661,9 @@ const formatArgument = (arg) => {
 
 // WebSocket连接管理
 const initWebSocket = () => {
-  const wsUrl = `ws://${window.location.hostname}:3400`
+  // 开发环境使用5175，生产环境使用当前页面端口
+  const wsPort = window.location.hostname === 'localhost' ? '5175' : window.location.port || '3400'
+  const wsUrl = `ws://${window.location.hostname}:${wsPort}`
   websocket = new WebSocket(wsUrl)
   
   websocket.onopen = () => {

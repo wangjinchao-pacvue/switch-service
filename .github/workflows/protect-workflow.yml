@@ -1,5 +1,6 @@
 name: Protect Workflow Files
 # 保护工作流文件，防止在非master分支修改
+# 确保工作流文件只能在master分支修改
 
 on:
   push:

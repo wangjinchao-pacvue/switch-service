@@ -1510,7 +1510,7 @@ app.get('/api/proxy/list', async (req, res) => {
 // 创建代理服务
 app.post('/api/proxy/create', async (req, res) => {
   try {
-    const { serviceName, targets, activeTarget } = req.body;
+    const { serviceName, targets, activeTarget, tags = [] } = req.body;
     
     // 检查服务名是否已存在
     const existingService = await database.getProxyServiceByName(serviceName);
@@ -1521,10 +1521,10 @@ app.post('/api/proxy/create', async (req, res) => {
     // 自动分配端口（4000-4100范围）
     const port = await database.getAvailablePort();
 
-    const serviceConfig = { serviceName, port, targets, activeTarget };
+    const serviceConfig = { serviceName, port, targets, activeTarget, tags };
     const createdService = await database.createProxyService(serviceConfig);
 
-    console.log(`✅ 创建代理服务成功: ${serviceName} -> 端口 ${port}`);
+    console.log(`✅ 创建代理服务成功: ${serviceName} -> 端口 ${port}${tags.length > 0 ? ` (标签: ${tags.join(', ')})` : ''}`);
     broadcast({ type: 'proxy_created', data: createdService });
     res.json({ success: true, service: createdService });
   } catch (error) {

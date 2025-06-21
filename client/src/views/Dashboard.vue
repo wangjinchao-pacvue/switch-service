@@ -920,6 +920,89 @@
             </el-button>
           </div>
         </el-form-item>
+        <el-form-item label="服务标签">
+          <div class="custom-tag-selector">
+            <div class="tag-selector-input" @click="toggleTagDropdown">
+              <div class="selected-tags" v-if="newService.tags.length > 0">
+                <span 
+                  v-for="tagName in newService.tags" 
+                  :key="tagName" 
+                  class="selected-tag"
+                  :style="{ backgroundColor: getTagColor(tagName) }"
+                >
+                  {{ tagName }}
+                  <el-icon class="tag-remove" @click.stop="removeTag(tagName)">
+                    <Close />
+                  </el-icon>
+                </span>
+              </div>
+              <span class="placeholder" v-if="newService.tags.length === 0">选择标签...</span>
+              <el-icon class="dropdown-arrow" :class="{ 'is-open': showTagDropdown }">
+                <ArrowDown />
+              </el-icon>
+            </div>
+            
+            <div class="tag-dropdown" v-show="showTagDropdown" @click.stop>
+              <div class="tag-search">
+                <el-input 
+                  v-model="tagSearchQuery"
+                  placeholder="搜索或创建标签..."
+                  size="small"
+                  clearable
+                  @input="onTagSearch"
+                  ref="tagSearchInput"
+                />
+              </div>
+              
+              <div class="tag-options">
+                <div 
+                  v-for="tag in filteredTags" 
+                  :key="tag.name"
+                  class="tag-option"
+                  :class="{ 'is-selected': newService.tags.includes(tag.name) }"
+                  @click="toggleTag(tag.name)"
+                >
+                  <div class="tag-info">
+                    <div class="tag-color" :style="{ backgroundColor: tag.color }"></div>
+                    <div class="tag-content">
+                      <div class="tag-name">{{ tag.name }}</div>
+                      <div class="tag-desc" v-if="tag.description">{{ tag.description }}</div>
+                    </div>
+                  </div>
+                  <el-icon class="check-icon" v-if="newService.tags.includes(tag.name)">
+                    <Check />
+                  </el-icon>
+                </div>
+                
+                <!-- 创建新标签选项 -->
+                <div 
+                  v-if="tagSearchQuery && !availableTags.find(t => t.name.toLowerCase() === tagSearchQuery.toLowerCase())"
+                  class="tag-option create-new"
+                  @click="createAndSelectTag(tagSearchQuery)"
+                >
+                  <div class="tag-info">
+                    <div class="tag-color" style="background-color: #409eff;"></div>
+                    <div class="tag-content">
+                      <div class="tag-name">创建 "{{ tagSearchQuery }}"</div>
+                      <div class="tag-desc">新建标签</div>
+                    </div>
+                  </div>
+                  <el-icon class="plus-icon">
+                    <Plus />
+                  </el-icon>
+                </div>
+                
+                <div v-if="filteredTags.length === 0 && !tagSearchQuery" class="no-tags">
+                  暂无标签
+                </div>
+              </div>
+            </div>
+          </div>
+          
+          <div class="form-help">
+            💡 可以选择现有标签，也可以搜索创建新标签
+          </div>
+        </el-form-item>
       </el-form>
       <template #footer>
         <el-button @click="showCreateDialog = false">取消</el-button>
@@ -1682,7 +1765,7 @@
 import { ref, reactive, onMounted, onUnmounted, computed, watch, nextTick } from 'vue'
 import { useAppStore } from '../stores/app'
 import { ElMessage, ElMessageBox } from 'element-plus'
-import { List, Plus, Search, Connection, WarningFilled, Refresh, Setting, Link, Management, Download, Upload, InfoFilled, ArrowDown, ArrowUp, Document, Delete, View, CopyDocument } from '@element-plus/icons-vue'
+import { List, Plus, Search, Connection, WarningFilled, Refresh, Setting, Link, Management, Download, Upload, InfoFilled, ArrowDown, ArrowUp, Document, Delete, View, CopyDocument, Check, Close } from '@element-plus/icons-vue'
 
 const appStore = useAppStore()
 
@@ -1801,6 +1884,12 @@ const loadingRequestDetails = ref(false)
 const showSystemLogDetailsDialog = ref(false)
 const currentSystemLogDetails = ref(null)
 
+// 自定义标签选择器相关
+const showTagDropdown = ref(false)
+const tagSearchQuery = ref('')
+const tagSearchInput = ref()
+const filteredTags = ref([])
+
 const editingTag = reactive({
   id: '',
   name: '',
@@ -1831,7 +1920,8 @@ const newService = reactive({
   targetList: [
     { name: '测试环境', url: '' },
     { name: '生产环境', url: '' }
-  ]
+  ],
+  tags: [] // 添加标签字段
 })
 
 const editingService = reactive({
@@ -2327,7 +2417,8 @@ const createService = async () => {
     await appStore.createProxyService({
       serviceName: newService.serviceName,
       targets,
-      activeTarget: validTargets[0].name
+      activeTarget: validTargets[0].name,
+      tags: newService.tags || [] // 包含标签信息
     })
     
     ElMessage.success('代理服务创建成功')
@@ -2560,6 +2651,88 @@ const getTagColor = (tagName) => {
   return tag ? tag.color : '#409eff'
 }
 
+// 自定义标签选择器方法
+const toggleTagDropdown = () => {
+  showTagDropdown.value = !showTagDropdown.value
+  if (showTagDropdown.value) {
+    filteredTags.value = availableTags.value
+    nextTick(() => {
+      if (tagSearchInput.value) {
+        tagSearchInput.value.focus()
+      }
+    })
+  } else {
+    tagSearchQuery.value = ''
+  }
+}
+
+const toggleTag = (tagName) => {
+  const index = newService.tags.indexOf(tagName)
+  if (index > -1) {
+    newService.tags.splice(index, 1)
+  } else {
+    newService.tags.push(tagName)
+  }
+}
+
+const removeTag = (tagName) => {
+  const index = newService.tags.indexOf(tagName)
+  if (index > -1) {
+    newService.tags.splice(index, 1)
+  }
+}
+
+const onTagSearch = () => {
+  if (!tagSearchQuery.value) {
+    filteredTags.value = availableTags.value
+  } else {
+    filteredTags.value = availableTags.value.filter(tag =>
+      tag.name.toLowerCase().includes(tagSearchQuery.value.toLowerCase()) ||
+      (tag.description && tag.description.toLowerCase().includes(tagSearchQuery.value.toLowerCase()))
+    )
+  }
+}
+
+const createAndSelectTag = async (tagName) => {
+  try {
+    const response = await fetch('/api/tags', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        name: tagName.trim(),
+        color: '#409eff',
+        description: ''
+      })
+    })
+    
+    const result = await response.json()
+    if (result.success) {
+      // 刷新标签列表
+      await fetchTags()
+      // 选中新创建的标签
+      if (!newService.tags.includes(tagName)) {
+        newService.tags.push(tagName)
+      }
+      // 清空搜索
+      tagSearchQuery.value = ''
+      filteredTags.value = availableTags.value
+      ElMessage.success('标签创建成功')
+    } else {
+      ElMessage.error(result.error || '创建标签失败')
+    }
+  } catch (error) {
+    ElMessage.error('创建标签失败')
+  }
+}
+
+// 点击外部关闭下拉框
+const handleClickOutside = (event) => {
+  if (showTagDropdown.value && !event.target.closest('.custom-tag-selector')) {
+    showTagDropdown.value = false
+    tagSearchQuery.value = ''
+  }
+}
+
 
 
 const addTarget = () => {
@@ -2596,8 +2769,14 @@ const resetCreateForm = () => {
     targetList: [
       { name: '测试环境', url: '' },
       { name: '生产环境', url: '' }
-    ]
+    ],
+    tags: [] // 重置标签字段
   })
+  
+  // 重置标签选择器状态
+  showTagDropdown.value = false
+  tagSearchQuery.value = ''
+  filteredTags.value = availableTags.value
 }
 
 // Eureka服务信息解析辅助函数
@@ -4004,6 +4183,9 @@ onMounted(async () => {
   
   // 初始化WebSocket连接
   initWebSocket()
+  
+  // 添加点击外部事件监听器
+  document.addEventListener('click', handleClickOutside)
 })
 
 onUnmounted(() => {
@@ -4022,6 +4204,9 @@ onUnmounted(() => {
     websocket.close()
     websocket = null
   }
+  
+  // 移除点击外部事件监听器
+  document.removeEventListener('click', handleClickOutside)
 })
 </script>
 
@@ -5656,6 +5841,208 @@ html:not(.dark) .jv-light .jv-item.jv-null,
 html:not(.dark) .jv-light .jv-item.jv-undefined {
   color: #c0c4cc !important;
   font-style: italic !important;
+}
+
+/* 自定义标签选择器样式 - 参考Cursor设计 */
+.custom-tag-selector {
+  position: relative;
+  width: 100%;
+}
+
+.tag-selector-input {
+  min-height: 32px;
+  padding: 6px 12px;
+  border: 1px solid var(--el-border-color);
+  border-radius: 6px;
+  background-color: var(--el-fill-color-blank);
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  transition: all 0.2s;
+}
+
+.tag-selector-input:hover {
+  border-color: var(--el-border-color-hover);
+}
+
+.tag-selector-input:focus-within {
+  border-color: var(--el-color-primary);
+  box-shadow: 0 0 0 2px var(--el-color-primary-light-9);
+}
+
+.selected-tags {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  flex: 1;
+}
+
+.selected-tag {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 2px 6px;
+  border-radius: 4px;
+  font-size: 12px;
+  color: white;
+  font-weight: 500;
+}
+
+.selected-tag .tag-remove {
+  font-size: 12px;
+  cursor: pointer;
+  opacity: 0.7;
+  transition: opacity 0.2s;
+}
+
+.selected-tag .tag-remove:hover {
+  opacity: 1;
+}
+
+.placeholder {
+  color: var(--el-text-color-placeholder);
+  font-size: 14px;
+  flex: 1;
+}
+
+.dropdown-arrow {
+  font-size: 12px;
+  color: var(--el-text-color-secondary);
+  transition: transform 0.2s;
+}
+
+.dropdown-arrow.is-open {
+  transform: rotate(180deg);
+}
+
+.tag-dropdown {
+  position: absolute;
+  top: 100%;
+  left: 0;
+  right: 0;
+  z-index: 2000;
+  margin-top: 4px;
+  background: var(--el-bg-color-overlay);
+  border: 1px solid var(--el-border-color);
+  border-radius: 6px;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
+  max-height: 240px;
+  overflow: hidden;
+}
+
+.tag-search {
+  padding: 8px;
+  border-bottom: 1px solid var(--el-border-color-lighter);
+}
+
+.tag-options {
+  max-height: 200px;
+  overflow-y: auto;
+}
+
+.tag-option {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 8px 12px;
+  cursor: pointer;
+  transition: background-color 0.2s;
+}
+
+.tag-option:hover {
+  background-color: var(--el-fill-color-light);
+}
+
+.tag-option.is-selected {
+  background-color: var(--el-color-primary-light-9);
+}
+
+.tag-option.create-new {
+  border-top: 1px solid var(--el-border-color-lighter);
+  background-color: var(--el-color-success-light-9);
+}
+
+.tag-option.create-new:hover {
+  background-color: var(--el-color-success-light-8);
+}
+
+.tag-info {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex: 1;
+}
+
+.tag-color {
+  width: 12px;
+  height: 12px;
+  border-radius: 50%;
+  border: 1px solid var(--el-border-color-lighter);
+  flex-shrink: 0;
+}
+
+.tag-content {
+  flex: 1;
+}
+
+.tag-name {
+  font-size: 14px;
+  font-weight: 500;
+  color: var(--el-text-color-primary);
+  line-height: 1.2;
+}
+
+.tag-desc {
+  font-size: 12px;
+  color: var(--el-text-color-secondary);
+  line-height: 1.2;
+  margin-top: 2px;
+}
+
+.check-icon {
+  color: var(--el-color-primary);
+  font-size: 16px;
+}
+
+.plus-icon {
+  color: var(--el-color-success);
+  font-size: 16px;
+}
+
+.no-tags {
+  padding: 16px;
+  text-align: center;
+  color: var(--el-text-color-secondary);
+  font-size: 14px;
+}
+
+/* 暗黑模式适配 */
+html.dark .tag-selector-input {
+  background-color: var(--el-fill-color-darker);
+  border-color: var(--el-border-color-dark);
+}
+
+html.dark .tag-selector-input:hover {
+  border-color: var(--el-border-color-hover);
+}
+
+html.dark .tag-dropdown {
+  background-color: var(--el-bg-color-page);
+  border-color: var(--el-border-color-dark);
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.4);
+}
+
+html.dark .tag-search {
+  border-bottom-color: var(--el-border-color-dark);
+}
+
+html.dark .tag-option:hover {
+  background-color: var(--el-fill-color-dark);
+}
+
+html.dark .tag-option.create-new {
+  border-top-color: var(--el-border-color-dark);
 }
 
 /* 首次配置弹窗样式 */

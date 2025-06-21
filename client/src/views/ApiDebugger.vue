@@ -44,6 +44,11 @@
               />
             </el-select>
             
+            <!-- 显示当前环境地址 -->
+            <div v-if="currentEnvironmentUrl" class="environment-url">
+              <small>当前环境地址: {{ currentEnvironmentUrl }}</small>
+            </div>
+            
             <!-- 自定义环境地址 -->
             <el-input
               v-if="selectedEnvironment === 'custom'"
@@ -104,14 +109,24 @@
           <template #header>
             <div class="card-header">
               <span>{{ selectedApi.name || selectedApi.path }}</span>
-              <el-button 
-                type="primary" 
-                @click="sendRequest"
-                :loading="requesting"
-                :icon="Position"
-              >
-                发送请求
-              </el-button>
+              <div class="header-actions">
+                <el-button 
+                  type="info" 
+                  @click="copyCurlCommand"
+                  :icon="CopyDocument"
+                  plain
+                >
+                  复制cURL
+                </el-button>
+                <el-button 
+                  type="primary" 
+                  @click="sendRequest"
+                  :loading="requesting"
+                  :icon="Position"
+                >
+                  发送请求
+                </el-button>
+              </div>
             </div>
           </template>
 
@@ -195,7 +210,7 @@
               <!-- 请求体 -->
               <div class="section" v-if="['POST', 'PUT', 'PATCH'].includes(selectedApi.method)">
                 <label class="section-label">请求体 (JSON)</label>
-                <div class="json-editor-container">
+                <div class="monaco-editor-container">
                   <vue-monaco-editor
                     v-model:value="selectedApi.body"
                     language="json"
@@ -239,7 +254,7 @@
                 <!-- 响应体 -->
                 <div class="section">
                   <label class="section-label">响应体</label>
-                  <div class="response-body">
+                  <div class="monaco-editor-container">
                     <vue-monaco-editor
                       :value="formatResponseBody(response.data)"
                       language="json"
@@ -304,7 +319,7 @@
 import { ref, computed, onMounted, watch } from 'vue'
 import { useAppStore } from '../stores/app'
 import { ElMessage, ElMessageBox } from 'element-plus'
-import { Plus, Delete, Position } from '@element-plus/icons-vue'
+import { Plus, Delete, Position, CopyDocument } from '@element-plus/icons-vue'
 import { VueMonacoEditor } from '@guolao/vue-monaco-editor'
 
 const appStore = useAppStore()
@@ -329,9 +344,14 @@ const editorOptions = {
   wordWrap: 'on',
   lineNumbers: 'on',
   glyphMargin: false,
-  folding: false,
+  folding: true,
   lineDecorationsWidth: 0,
-  lineNumbersMinChars: 3
+  lineNumbersMinChars: 3,
+  tabSize: 2,
+  insertSpaces: true,
+  detectIndentation: false,
+  fontSize: 14,
+  fontFamily: 'Consolas, Monaco, "Courier New", monospace'
 }
 
 // 代理服务列表
@@ -351,6 +371,22 @@ const apiData = ref({})
 const currentServiceApis = computed(() => {
   if (!selectedService.value) return []
   return apiData.value[selectedService.value] || []
+})
+
+// 当前环境地址
+const currentEnvironmentUrl = computed(() => {
+  if (!selectedService.value) return ''
+  
+  if (selectedEnvironment.value === 'target') {
+    const service = proxyServices.value.find(s => s.serviceName === selectedService.value)
+    return service?.targetUrl || ''
+  } else if (selectedEnvironment.value === 'local') {
+    return 'http://localhost'
+  } else if (selectedEnvironment.value === 'custom') {
+    return customEnvironmentUrl.value || ''
+  }
+  
+  return ''
 })
 
 // 新接口表单
@@ -387,10 +423,11 @@ const addApi = async () => {
     method: newApi.value.method,
     path: newApi.value.path,
     headers: [
-      { key: 'Content-Type', value: 'application/json' }
+      { key: 'Content-Type', value: 'application/json' },
+      { key: 'Accept', value: 'application/json' }
     ],
     params: [],
-    body: ''
+    body: ['POST', 'PUT', 'PATCH'].includes(newApi.value.method) ? '{\n  \n}' : ''
   }
 
   if (!apiData.value[selectedService.value]) {
@@ -422,11 +459,15 @@ const deleteApi = async (api) => {
       }
     )
     
+    // 从本地数据中删除
     const index = apiData.value[selectedService.value].findIndex(item => item.id === api.id)
     if (index > -1) {
       apiData.value[selectedService.value].splice(index, 1)
+      
+      // 保存到后端
       await saveApiData()
       
+      // 如果删除的是当前选中的接口，清空选择
       if (selectedApi.value?.id === api.id) {
         selectedApi.value = null
         response.value = null
@@ -466,6 +507,52 @@ const removeParam = async (index) => {
 // 请求体变化处理
 const onBodyChange = async () => {
   await saveApiData()
+}
+
+// 复制cURL命令
+const copyCurlCommand = () => {
+  if (!selectedApi.value || !selectedService.value) {
+    ElMessage.warning('请选择代理服务和接口')
+    return
+  }
+
+  // 构建URL
+  let baseUrl = currentEnvironmentUrl.value
+  const fullUrl = new URL(selectedApi.value.path, baseUrl)
+  
+  // 添加查询参数
+  selectedApi.value.params.forEach(param => {
+    if (param.key && param.value) {
+      fullUrl.searchParams.append(param.key, param.value)
+    }
+  })
+
+  // 构建cURL命令
+  let curlCommand = `curl -X ${selectedApi.value.method}`
+  
+  // 添加请求头
+  selectedApi.value.headers.forEach(header => {
+    if (header.key && header.value) {
+      curlCommand += ` \\\n  -H "${header.key}: ${header.value}"`
+    }
+  })
+  
+  // 添加请求体
+  if (['POST', 'PUT', 'PATCH'].includes(selectedApi.value.method) && selectedApi.value.body) {
+    const body = selectedApi.value.body.replace(/"/g, '\\"')
+    curlCommand += ` \\\n  -d "${body}"`
+  }
+  
+  // 添加URL
+  curlCommand += ` \\\n  "${fullUrl.toString()}"`
+  
+  // 复制到剪贴板
+  navigator.clipboard.writeText(curlCommand).then(() => {
+    ElMessage.success('cURL命令已复制到剪贴板')
+  }).catch(() => {
+    ElMessage.error('复制失败，请手动复制')
+    console.log('cURL命令:', curlCommand)
+  })
 }
 
 // 发送请求
@@ -656,10 +743,24 @@ onMounted(async () => {
   margin-top: 8px;
 }
 
+.environment-url {
+  margin-top: 8px;
+  padding: 8px;
+  background-color: var(--bg-color-secondary);
+  border-radius: 4px;
+  color: var(--text-color-secondary);
+  font-family: 'Courier New', monospace;
+}
+
 .card-header {
   display: flex;
   justify-content: space-between;
   align-items: center;
+}
+
+.header-actions {
+  display: flex;
+  gap: 8px;
 }
 
 /* 接口列表样式 */
@@ -764,6 +865,13 @@ onMounted(async () => {
   background-color: var(--input-bg);
   color: var(--text-color);
   resize: vertical;
+}
+
+/* Monaco Editor 样式 */
+.monaco-editor-container {
+  border: 1px solid var(--border-color);
+  border-radius: 6px;
+  overflow: hidden;
 }
 
 /* 响应样式 */

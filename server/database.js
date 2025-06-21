@@ -177,17 +177,18 @@ class Database {
                   if (logErr) {
                     console.error('创建proxy_logs表失败:', logErr);
                     reject(logErr);
-                  } else {
-                    console.log('数据库表初始化完成');
-                    this.db.run(createDebugApisTable, (debugErr) => {
-                      if (debugErr) {
-                        console.error('创建debug_apis表失败:', debugErr);
-                        reject(debugErr);
-                      } else {
-                        resolve();
-                      }
-                    });
-                  }
+                                      } else {
+                      // 创建debug_apis表
+                      this.db.run(createDebugApisTable, (debugErr) => {
+                        if (debugErr) {
+                          console.error('创建debug_apis表失败:', debugErr);
+                          reject(debugErr);
+                        } else {
+                          console.log('数据库表初始化完成');
+                          resolve();
+                        }
+                      });
+                    }
                 });
               });
             });

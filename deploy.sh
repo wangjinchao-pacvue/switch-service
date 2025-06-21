@@ -6,8 +6,8 @@
 set -e
 
 CONTAINER_NAME="switch-service"
-# 默认使用latest，也可以指定版本：./deploy.sh 1.0.1
-VERSION=${1:-latest}
+# 默认使用1.0.0，也可以指定版本：./deploy.sh 1.0.1
+VERSION=${1:-1.0.0}
 IMAGE_NAME="jcwangdocker/switch-service:${VERSION}"
 HOST_PORT=3400
 PROXY_PORT_START=4000

@@ -2987,7 +2987,8 @@ process.on('unhandledRejection', (reason, promise) => {
   // 不要自动退出，只记录错误
 });
 
-const PORT = process.env.PORT || 3400;
+// 开发环境使用5175，生产环境(Docker)使用3400
+const PORT = process.env.PORT || (process.env.NODE_ENV === 'production' ? 3400 : 5175);
 server.listen(PORT, () => {
   console.log(`Switch Service server running on port ${PORT}`);
 });

@@ -6,12 +6,14 @@
 set -e
 
 CONTAINER_NAME="switch-service"
-IMAGE_NAME="jcwangdocker/switch-service:latest"
+# 默认使用latest，也可以指定版本：./deploy.sh 1.0.1
+VERSION=${1:-latest}
+IMAGE_NAME="jcwangdocker/switch-service:${VERSION}"
 HOST_PORT=3400
 PROXY_PORT_START=4000
 PROXY_PORT_END=4100
 
-echo "🚀 开始部署 Switch Service..."
+echo "🚀 开始部署 Switch Service (版本: ${VERSION})..."
 
 # 停止并删除现有容器（如果存在）
 if docker ps -a --format 'table {{.Names}}' | grep -q "^${CONTAINER_NAME}$"; then

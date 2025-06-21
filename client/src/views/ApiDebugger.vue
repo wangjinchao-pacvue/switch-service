@@ -41,7 +41,12 @@
                 :key="env.key"
                 :label="env.label"
                 :value="env.key"
-              />
+              >
+                <div class="env-option">
+                  <span>{{ env.label }}</span>
+                  <span v-if="env.isActive" class="active-badge">正在使用</span>
+                </div>
+              </el-option>
             </el-select>
             
             <!-- 显示当前环境地址 -->
@@ -50,12 +55,15 @@
             </div>
             
             <!-- 自定义环境地址 -->
-            <el-input
-              v-if="selectedEnvironment === 'custom'"
-              v-model="customEnvironmentUrl"
-              placeholder="请输入自定义环境地址"
-              class="mt-2"
-            />
+            <div v-if="selectedEnvironment === 'custom'" class="mt-2">
+              <el-input
+                v-model="customEnvironmentUrl"
+                placeholder="请输入自定义环境地址，例如：http://localhost:8080"
+              />
+              <small class="custom-url-hint">
+                自定义地址将优先于其他环境配置使用
+              </small>
+            </div>
           </div>
 
           <!-- 接口列表 -->
@@ -357,12 +365,53 @@ const editorOptions = {
 // 代理服务列表
 const proxyServices = computed(() => appStore.proxyServices || [])
 
-// 环境配置
-const environments = ref([
-  { key: 'target', label: '目标地址（配置的目标地址）' },
-  { key: 'local', label: '本地环境（localhost）' },
-  { key: 'custom', label: '自定义地址' }
-])
+// 环境配置 - 动态生成
+const environments = computed(() => {
+  if (!selectedService.value) return []
+  
+  const service = proxyServices.value.find(s => s.serviceName === selectedService.value)
+  if (!service) return []
+  
+  const envs = []
+  
+  // 添加代理服务配置的环境
+  if (service.targetUrl) {
+    envs.push({
+      key: 'target',
+      label: `目标地址 ${service.isRunning ? '(当前使用)' : ''}`,
+      url: service.targetUrl,
+      isActive: service.isRunning
+    })
+  }
+  
+  if (service.testUrl) {
+    envs.push({
+      key: 'test',
+      label: `测试地址`,
+      url: service.testUrl,
+      isActive: false
+    })
+  }
+  
+  if (service.devUrl) {
+    envs.push({
+      key: 'dev',
+      label: `开发地址`,
+      url: service.devUrl,
+      isActive: false
+    })
+  }
+  
+  // 添加自定义地址选项
+  envs.push({
+    key: 'custom',
+    label: '自定义地址',
+    url: '',
+    isActive: false
+  })
+  
+  return envs
+})
 
 // 接口数据存储
 const apiData = ref({})
@@ -375,18 +424,16 @@ const currentServiceApis = computed(() => {
 
 // 当前环境地址
 const currentEnvironmentUrl = computed(() => {
-  if (!selectedService.value) return ''
+  if (!selectedService.value || !selectedEnvironment.value) return ''
   
-  if (selectedEnvironment.value === 'target') {
-    const service = proxyServices.value.find(s => s.serviceName === selectedService.value)
-    return service?.targetUrl || ''
-  } else if (selectedEnvironment.value === 'local') {
-    return 'http://localhost'
-  } else if (selectedEnvironment.value === 'custom') {
-    return customEnvironmentUrl.value || ''
+  // 优先使用自定义地址
+  if (selectedEnvironment.value === 'custom' && customEnvironmentUrl.value) {
+    return customEnvironmentUrl.value
   }
   
-  return ''
+  // 从环境配置中获取地址
+  const env = environments.value.find(e => e.key === selectedEnvironment.value)
+  return env?.url || ''
 })
 
 // 新接口表单
@@ -400,6 +447,20 @@ const newApi = ref({
 const onServiceChange = () => {
   selectedApi.value = null
   response.value = null
+  
+  // 自动选择默认环境（优先选择正在使用的环境）
+  const activeEnv = environments.value.find(env => env.isActive)
+  if (activeEnv) {
+    selectedEnvironment.value = activeEnv.key
+  } else if (environments.value.length > 0) {
+    selectedEnvironment.value = environments.value[0].key
+  } else {
+    selectedEnvironment.value = ''
+  }
+  
+  // 清空自定义地址
+  customEnvironmentUrl.value = ''
+  
   loadServiceApis()
 }
 
@@ -517,7 +578,12 @@ const copyCurlCommand = () => {
   }
 
   // 构建URL
-  let baseUrl = currentEnvironmentUrl.value
+  const baseUrl = currentEnvironmentUrl.value
+  if (!baseUrl) {
+    ElMessage.warning('请先配置环境地址')
+    return
+  }
+  
   const fullUrl = new URL(selectedApi.value.path, baseUrl)
   
   // 添加查询参数
@@ -565,16 +631,11 @@ const sendRequest = async () => {
   requesting.value = true
 
   try {
-    // 构建请求URL
-    let baseUrl = ''
-    if (selectedEnvironment.value === 'target') {
-      // 使用代理服务的目标地址
-      const service = proxyServices.value.find(s => s.serviceName === selectedService.value)
-      baseUrl = service?.targetUrl || ''
-    } else if (selectedEnvironment.value === 'local') {
-      baseUrl = 'http://localhost'
-    } else if (selectedEnvironment.value === 'custom') {
-      baseUrl = customEnvironmentUrl.value
+    // 获取当前环境地址
+    const baseUrl = currentEnvironmentUrl.value
+    if (!baseUrl) {
+      ElMessage.warning('请先配置环境地址')
+      return
     }
 
     const fullUrl = new URL(selectedApi.value.path, baseUrl).toString()
@@ -750,6 +811,29 @@ onMounted(async () => {
   border-radius: 4px;
   color: var(--text-color-secondary);
   font-family: 'Courier New', monospace;
+}
+
+.env-option {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  width: 100%;
+}
+
+.active-badge {
+  background-color: #67c23a;
+  color: white;
+  padding: 2px 6px;
+  border-radius: 10px;
+  font-size: 11px;
+  font-weight: bold;
+}
+
+.custom-url-hint {
+  display: block;
+  margin-top: 4px;
+  color: var(--text-color-secondary);
+  font-size: 12px;
 }
 
 .card-header {

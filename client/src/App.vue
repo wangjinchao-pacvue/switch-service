@@ -19,6 +19,10 @@
             <el-icon><Setting /></el-icon>
             <span>服务管理</span>
           </el-menu-item>
+          <el-menu-item index="api-debugger">
+            <el-icon><Position /></el-icon>
+            <span>接口调试</span>
+          </el-menu-item>
         </el-menu>
       </el-aside>
 
@@ -56,7 +60,7 @@
 import { ref, computed, onMounted } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { useAppStore } from './stores/app'
-import { Setting, Moon, Sunny } from '@element-plus/icons-vue'
+import { Setting, Moon, Sunny, Position } from '@element-plus/icons-vue'
 
 const appStore = useAppStore()
 const route = useRoute()
@@ -67,7 +71,8 @@ const activeMenu = ref('service-management')
 
 // 页面标题映射
 const pageTitleMap = {
-  'service-management': '服务管理'
+  'service-management': '服务管理',
+  'api-debugger': '接口调试'
 }
 
 // 当前页面标题
@@ -83,6 +88,9 @@ const handleMenuSelect = (index) => {
     case 'service-management':
       router.push('/')
       break
+    case 'api-debugger':
+      router.push('/api-debugger')
+      break
     default:
       router.push('/')
   }
@@ -92,6 +100,8 @@ onMounted(async () => {
   // 根据当前路由设置激活菜单
   if (route.path === '/') {
     activeMenu.value = 'service-management'
+  } else if (route.path === '/api-debugger') {
+    activeMenu.value = 'api-debugger'
   }
   
   // 初始加载数据

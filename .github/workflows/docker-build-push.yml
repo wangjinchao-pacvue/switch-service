@@ -2,7 +2,7 @@ name: Build and Push Docker Image
 
 on:
   push:
-    branches: [ master, main ]
+    branches: [ 'release_*' ]  # 只有release分支触发构建
     tags: [ 'v*' ]
   pull_request:
     branches: [ master, main ]
@@ -28,30 +28,37 @@ jobs:
         username: ${{ secrets.DOCKERHUB_USERNAME }}
         password: ${{ secrets.DOCKERHUB_TOKEN }}
         
-    - name: Get next version
+    - name: Get version from branch
       id: version
       run: |
-        # 获取最新的tag版本
-        git fetch --tags
-        LATEST_TAG=$(git tag -l "v1.0.*" | sort -V | tail -n1)
-        if [ -z "$LATEST_TAG" ]; then
-          NEXT_VERSION="1.0.1"
+        # 从分支名称提取版本号 (release_1.0.0 -> 1.0.0)
+        BRANCH_NAME=${GITHUB_REF#refs/heads/}
+        echo "Branch name: $BRANCH_NAME"
+        
+        if [[ $BRANCH_NAME =~ ^release_([0-9]+\.[0-9]+\.[0-9]+)$ ]]; then
+          VERSION=${BASH_REMATCH[1]}
+          echo "Extracted version: $VERSION"
+          echo "version=$VERSION" >> $GITHUB_OUTPUT
         else
-          # 提取版本号并递增
-          PATCH_VERSION=$(echo $LATEST_TAG | sed 's/v1\.0\.//')
-          NEXT_PATCH=$((PATCH_VERSION + 1))
-          NEXT_VERSION="1.0.$NEXT_PATCH"
+          echo "Error: Branch name does not match release_x.x.x pattern"
+          exit 1
         fi
-        echo "next_version=$NEXT_VERSION" >> $GITHUB_OUTPUT
-        echo "Next version will be: $NEXT_VERSION"
         
     - name: Create and push tag
-      if: github.event_name != 'pull_request' && github.ref == 'refs/heads/master'
+      if: github.event_name != 'pull_request'
       run: |
         git config user.name "github-actions[bot]"
         git config user.email "github-actions[bot]@users.noreply.github.com"
-        git tag -a "v${{ steps.version.outputs.next_version }}" -m "Auto-generated version v${{ steps.version.outputs.next_version }}"
-        git push origin "v${{ steps.version.outputs.next_version }}"
+        
+        # 检查标签是否已存在
+        if git rev-parse "v${{ steps.version.outputs.version }}" >/dev/null 2>&1; then
+          echo "Tag v${{ steps.version.outputs.version }} already exists, updating it"
+          git tag -d "v${{ steps.version.outputs.version }}" || true
+          git push origin ":refs/tags/v${{ steps.version.outputs.version }}" || true
+        fi
+        
+        git tag -a "v${{ steps.version.outputs.version }}" -m "Release version v${{ steps.version.outputs.version }} from branch ${GITHUB_REF#refs/heads/}"
+        git push origin "v${{ steps.version.outputs.version }}"
         
     - name: Extract metadata
       id: meta
@@ -59,13 +66,12 @@ jobs:
       with:
         images: ${{ env.DOCKER_REPO }}
         tags: |
-          type=ref,event=branch
           type=ref,event=pr
           type=semver,pattern={{version}}
           type=semver,pattern={{major}}.{{minor}}
-          type=raw,value=latest,enable={{is_default_branch}}
-          type=raw,value=${{ steps.version.outputs.next_version }},enable={{is_default_branch}}
-          type=raw,value=v${{ steps.version.outputs.next_version }},enable={{is_default_branch}}
+          type=raw,value=${{ steps.version.outputs.version }}
+          type=raw,value=v${{ steps.version.outputs.version }}
+          type=raw,value=latest,enable=${{ contains(github.ref, 'release_1.0.0') }}
           
     - name: Build and push Docker image
       uses: docker/build-push-action@v5

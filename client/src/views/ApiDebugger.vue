@@ -196,11 +196,13 @@
               <div class="section" v-if="['POST', 'PUT', 'PATCH'].includes(selectedApi.method)">
                 <label class="section-label">请求体 (JSON)</label>
                 <div class="json-editor-container">
-                  <textarea
-                    v-model="selectedApi.body"
-                    class="json-editor"
-                    placeholder='{"key": "value"}'
-                    rows="10"
+                  <vue-monaco-editor
+                    v-model:value="selectedApi.body"
+                    language="json"
+                    theme="vs-dark"
+                    :options="editorOptions"
+                    @change="onBodyChange"
+                    style="height: 200px;"
                   />
                 </div>
               </div>
@@ -238,7 +240,13 @@
                 <div class="section">
                   <label class="section-label">响应体</label>
                   <div class="response-body">
-                    <pre>{{ formatResponseBody(response.data) }}</pre>
+                    <vue-monaco-editor
+                      :value="formatResponseBody(response.data)"
+                      language="json"
+                      theme="vs-dark"
+                      :options="{ ...editorOptions, readOnly: true }"
+                      style="height: 300px;"
+                    />
                   </div>
                 </div>
               </div>
@@ -297,6 +305,7 @@ import { ref, computed, onMounted, watch } from 'vue'
 import { useAppStore } from '../stores/app'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { Plus, Delete, Position } from '@element-plus/icons-vue'
+import { VueMonacoEditor } from '@guolao/vue-monaco-editor'
 
 const appStore = useAppStore()
 
@@ -309,6 +318,21 @@ const activeTab = ref('request')
 const showAddApiDialog = ref(false)
 const requesting = ref(false)
 const response = ref(null)
+
+// Monaco Editor 配置
+const editorOptions = {
+  automaticLayout: true,
+  formatOnType: true,
+  formatOnPaste: true,
+  minimap: { enabled: false },
+  scrollBeyondLastLine: false,
+  wordWrap: 'on',
+  lineNumbers: 'on',
+  glyphMargin: false,
+  folding: false,
+  lineDecorationsWidth: 0,
+  lineNumbersMinChars: 3
+}
 
 // 代理服务列表
 const proxyServices = computed(() => appStore.proxyServices || [])
@@ -351,7 +375,7 @@ const selectApi = (api) => {
 }
 
 // 添加接口
-const addApi = () => {
+const addApi = async () => {
   if (!newApi.value.path) {
     ElMessage.warning('请输入接口路径')
     return
@@ -374,7 +398,7 @@ const addApi = () => {
   }
   
   apiData.value[selectedService.value].push(api)
-  saveApiData()
+  await saveApiData()
   
   // 重置表单
   newApi.value = {
@@ -401,7 +425,7 @@ const deleteApi = async (api) => {
     const index = apiData.value[selectedService.value].findIndex(item => item.id === api.id)
     if (index > -1) {
       apiData.value[selectedService.value].splice(index, 1)
-      saveApiData()
+      await saveApiData()
       
       if (selectedApi.value?.id === api.id) {
         selectedApi.value = null
@@ -416,27 +440,32 @@ const deleteApi = async (api) => {
 }
 
 // 添加请求头
-const addHeader = () => {
+const addHeader = async () => {
   selectedApi.value.headers.push({ key: '', value: '' })
-  saveApiData()
+  await saveApiData()
 }
 
 // 删除请求头
-const removeHeader = (index) => {
+const removeHeader = async (index) => {
   selectedApi.value.headers.splice(index, 1)
-  saveApiData()
+  await saveApiData()
 }
 
 // 添加参数
-const addParam = () => {
+const addParam = async () => {
   selectedApi.value.params.push({ key: '', value: '' })
-  saveApiData()
+  await saveApiData()
 }
 
 // 删除参数
-const removeParam = (index) => {
+const removeParam = async (index) => {
   selectedApi.value.params.splice(index, 1)
-  saveApiData()
+  await saveApiData()
+}
+
+// 请求体变化处理
+const onBodyChange = async () => {
+  await saveApiData()
 }
 
 // 发送请求
@@ -447,7 +476,6 @@ const sendRequest = async () => {
   }
 
   requesting.value = true
-  const startTime = Date.now()
 
   try {
     // 构建请求URL
@@ -462,15 +490,8 @@ const sendRequest = async () => {
       baseUrl = customEnvironmentUrl.value
     }
 
-    const url = new URL(selectedApi.value.path, baseUrl)
+    const fullUrl = new URL(selectedApi.value.path, baseUrl).toString()
     
-    // 添加查询参数
-    selectedApi.value.params.forEach(param => {
-      if (param.key && param.value) {
-        url.searchParams.append(param.key, param.value)
-      }
-    })
-
     // 构建请求头
     const headers = {}
     selectedApi.value.headers.forEach(header => {
@@ -479,55 +500,51 @@ const sendRequest = async () => {
       }
     })
 
-    // 构建请求配置
-    const config = {
-      method: selectedApi.value.method,
-      headers
-    }
-
-    // 添加请求体（如果是POST/PUT/PATCH）
-    if (['POST', 'PUT', 'PATCH'].includes(selectedApi.value.method) && selectedApi.value.body) {
-      config.body = selectedApi.value.body
-    }
-
-    // 发送请求
-    const res = await fetch(url.toString(), config)
-    const duration = Date.now() - startTime
-    
-    // 获取响应头
-    const responseHeaders = {}
-    res.headers.forEach((value, key) => {
-      responseHeaders[key] = value
+    // 构建查询参数
+    const params = {}
+    selectedApi.value.params.forEach(param => {
+      if (param.key && param.value) {
+        params[param.key] = param.value
+      }
     })
 
-    // 获取响应体
-    let responseData
-    const contentType = res.headers.get('content-type')
-    if (contentType && contentType.includes('application/json')) {
-      responseData = await res.json()
+    // 构建请求数据
+    const requestData = {
+      url: fullUrl,
+      method: selectedApi.value.method,
+      headers,
+      params,
+      body: ['POST', 'PUT', 'PATCH'].includes(selectedApi.value.method) ? selectedApi.value.body : undefined
+    }
+
+    // 通过后端代理发送请求
+    const res = await fetch('/api/debug/proxy-request', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json'
+      },
+      body: JSON.stringify(requestData)
+    })
+
+    const result = await res.json()
+    
+    if (result.success) {
+      response.value = result.data
+      activeTab.value = 'response'
+      ElMessage.success('请求发送成功')
     } else {
-      responseData = await res.text()
+      response.value = result.data
+      activeTab.value = 'response'
+      ElMessage.error('请求发送失败: ' + result.error)
     }
-
-    response.value = {
-      status: res.status,
-      statusText: res.statusText,
-      headers: responseHeaders,
-      data: responseData,
-      duration
-    }
-
-    activeTab.value = 'response'
-    ElMessage.success('请求发送成功')
 
   } catch (error) {
-    const duration = Date.now() - startTime
     response.value = {
       status: 0,
       statusText: 'Network Error',
       headers: {},
       data: error.message,
-      duration
+      duration: 0
     }
     
     activeTab.value = 'response'
@@ -554,19 +571,35 @@ const formatResponseBody = (data) => {
 }
 
 // 保存接口数据
-const saveApiData = () => {
-  localStorage.setItem('api-debugger-data', JSON.stringify(apiData.value))
+const saveApiData = async () => {
+  if (!selectedService.value) return
+  
+  try {
+    await fetch('/api/debug/apis', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json'
+      },
+      body: JSON.stringify({
+        serviceName: selectedService.value,
+        apis: apiData.value[selectedService.value] || []
+      })
+    })
+  } catch (error) {
+    console.error('保存接口数据失败:', error)
+  }
 }
 
 // 加载接口数据
-const loadApiData = () => {
-  const saved = localStorage.getItem('api-debugger-data')
-  if (saved) {
-    try {
-      apiData.value = JSON.parse(saved)
-    } catch (error) {
-      console.error('加载接口数据失败:', error)
+const loadApiData = async () => {
+  try {
+    const res = await fetch('/api/debug/apis')
+    const result = await res.json()
+    if (result.success) {
+      apiData.value = result.data
     }
+  } catch (error) {
+    console.error('加载接口数据失败:', error)
   }
 }
 
@@ -579,12 +612,9 @@ const loadServiceApis = () => {
   }
 }
 
-// 监听接口数据变化，自动保存
-watch(apiData, saveApiData, { deep: true })
-
 onMounted(async () => {
   await appStore.fetchProxyServices()
-  loadApiData()
+  await loadApiData()
 })
 </script>
 

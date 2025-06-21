@@ -3224,4 +3224,113 @@ app.post('/api/config/port-range', async (req, res) => {
   }
 });
 
+// 接口调试相关API
+app.get('/api/debug/apis', (req, res) => {
+  try {
+    const apis = database.getDebugApis()
+    res.json({ success: true, data: apis })
+  } catch (error) {
+    console.error('获取调试接口失败:', error)
+    res.status(500).json({ success: false, error: error.message })
+  }
+})
+
+app.post('/api/debug/apis', (req, res) => {
+  try {
+    const { serviceName, apis } = req.body
+    database.saveDebugApis(serviceName, apis)
+    res.json({ success: true })
+  } catch (error) {
+    console.error('保存调试接口失败:', error)
+    res.status(500).json({ success: false, error: error.message })
+  }
+})
+
+app.delete('/api/debug/apis/:serviceName/:apiId', (req, res) => {
+  try {
+    const { serviceName, apiId } = req.params
+    database.deleteDebugApi(serviceName, parseInt(apiId))
+    res.json({ success: true })
+  } catch (error) {
+    console.error('删除调试接口失败:', error)
+    res.status(500).json({ success: false, error: error.message })
+  }
+})
+
+// 代理请求API（用于跨域请求）
+app.post('/api/debug/proxy-request', async (req, res) => {
+  try {
+    const { url, method, headers, body, params } = req.body
+    
+    // 构建完整URL
+    const targetUrl = new URL(url)
+    if (params) {
+      Object.entries(params).forEach(([key, value]) => {
+        if (key && value) {
+          targetUrl.searchParams.append(key, value)
+        }
+      })
+    }
+
+    // 构建请求选项
+    const options = {
+      method: method || 'GET',
+      headers: headers || {}
+    }
+
+    // 添加请求体
+    if (['POST', 'PUT', 'PATCH'].includes(method) && body) {
+      options.body = body
+    }
+
+    const startTime = Date.now()
+    const response = await fetch(targetUrl.toString(), options)
+    const duration = Date.now() - startTime
+
+    // 获取响应头
+    const responseHeaders = {}
+    response.headers.forEach((value, key) => {
+      responseHeaders[key] = value
+    })
+
+    // 获取响应体
+    let responseData
+    const contentType = response.headers.get('content-type')
+    if (contentType && contentType.includes('application/json')) {
+      try {
+        responseData = await response.json()
+      } catch {
+        responseData = await response.text()
+      }
+    } else {
+      responseData = await response.text()
+    }
+
+    res.json({
+      success: true,
+      data: {
+        status: response.status,
+        statusText: response.statusText,
+        headers: responseHeaders,
+        data: responseData,
+        duration
+      }
+    })
+
+  } catch (error) {
+    console.error('代理请求失败:', error)
+    res.status(500).json({
+      success: false,
+      error: error.message,
+      data: {
+        status: 0,
+        statusText: 'Network Error',
+        headers: {},
+        data: error.message,
+        duration: 0
+      }
+    })
+  }
+})
+
 module.exports = app; 

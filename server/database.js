@@ -123,6 +123,16 @@ class Database {
         )
       `;
 
+      const createDebugApisTable = `
+        CREATE TABLE IF NOT EXISTS debug_apis (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          service_name TEXT NOT NULL,
+          api_data TEXT NOT NULL,
+          created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+          updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+        )
+      `;
+
       // 首先创建 proxy_services 表
       this.db.run(createProxyServicesTable, (err) => {
         if (err) {
@@ -169,7 +179,14 @@ class Database {
                     reject(logErr);
                   } else {
                     console.log('数据库表初始化完成');
-                    resolve();
+                    this.db.run(createDebugApisTable, (debugErr) => {
+                      if (debugErr) {
+                        console.error('创建debug_apis表失败:', debugErr);
+                        reject(debugErr);
+                      } else {
+                        resolve();
+                      }
+                    });
                   }
                 });
               });
@@ -972,6 +989,68 @@ class Database {
       }
     });
   }
+
+  // 调试接口相关方法
+  getDebugApis() {
+    const stmt = this.db.prepare('SELECT * FROM debug_apis ORDER BY service_name, id');
+    const rows = stmt.all();
+    
+    const result = {};
+    rows.forEach(row => {
+      if (!result[row.service_name]) {
+        result[row.service_name] = [];
+      }
+      result[row.service_name] = JSON.parse(row.api_data);
+    });
+    
+    return result;
+  },
+
+  saveDebugApis(serviceName, apis) {
+    const deleteStmt = this.db.prepare('DELETE FROM debug_apis WHERE service_name = ?');
+    const insertStmt = this.db.prepare(`
+      INSERT INTO debug_apis (service_name, api_data, updated_at) 
+      VALUES (?, ?, CURRENT_TIMESTAMP)
+    `);
+    
+    // 使用事务确保数据一致性
+    const transaction = this.db.transaction(() => {
+      deleteStmt.run(serviceName);
+      if (apis && apis.length > 0) {
+        insertStmt.run(serviceName, JSON.stringify(apis));
+      }
+    });
+    
+    transaction();
+    console.log(`保存服务 ${serviceName} 的调试接口配置，共 ${apis?.length || 0} 个接口`);
+  },
+
+  deleteDebugApi(serviceName, apiId) {
+    // 先获取当前数据
+    const selectStmt = this.db.prepare('SELECT api_data FROM debug_apis WHERE service_name = ?');
+    const row = selectStmt.get(serviceName);
+    
+    if (row) {
+      const apis = JSON.parse(row.api_data);
+      const filteredApis = apis.filter(api => api.id !== apiId);
+      
+      if (filteredApis.length === 0) {
+        // 如果没有接口了，删除整个记录
+        const deleteStmt = this.db.prepare('DELETE FROM debug_apis WHERE service_name = ?');
+        deleteStmt.run(serviceName);
+      } else {
+        // 更新数据
+        const updateStmt = this.db.prepare(`
+          UPDATE debug_apis 
+          SET api_data = ?, updated_at = CURRENT_TIMESTAMP 
+          WHERE service_name = ?
+        `);
+        updateStmt.run(JSON.stringify(filteredApis), serviceName);
+      }
+      
+      console.log(`删除服务 ${serviceName} 的调试接口 (ID: ${apiId})`);
+    }
+  },
 
   close() {
     if (this.db) {

@@ -8,6 +8,9 @@ import { useAppStore } from './stores/app'
 import JsonViewer from 'vue-json-viewer'
 import 'vue-json-viewer/style.css'
 
+// Monaco Editor
+import { install as VueMonacoEditorPlugin } from '@guolao/vue-monaco-editor'
+
 // 按需导入需要的图标
 import {
   Search,
@@ -47,7 +50,8 @@ import {
   List,
   Location,
   ArrowDown,
-  ArrowUp
+  ArrowUp,
+  Position
 } from '@element-plus/icons-vue'
 
 const app = createApp(App)
@@ -91,7 +95,8 @@ const icons = {
   List,
   Location,
   ArrowDown,
-  ArrowUp
+  ArrowUp,
+  Position
 }
 
 for (const [key, component] of Object.entries(icons)) {
@@ -103,6 +108,12 @@ app.use(pinia)
 app.use(router)
 app.use(ElementPlus)
 app.use(JsonViewer)
+app.use(VueMonacoEditorPlugin, {
+  paths: {
+    // CDN 路径
+    vs: 'https://cdn.jsdelivr.net/npm/monaco-editor@0.43.0/min/vs'
+  }
+})
 
 // 初始化主题
 const appStore = useAppStore()

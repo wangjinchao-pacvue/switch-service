@@ -27,8 +27,8 @@ jobs:
     - name: Get all release branches
       id: get-branches
       run: |
-        # 获取所有远程release分支
-        release_branches=$(git branch -r | grep -E 'origin/release/' | sed 's/origin\///' | tr '\n' ' ')
+        # 获取所有远程release分支 (匹配 release_x.x.x 模式)
+        release_branches=$(git branch -r | grep -E 'origin/release_' | sed 's/origin\///' | tr '\n' ' ')
         echo "Found release branches: $release_branches"
         echo "branches=$release_branches" >> $GITHUB_OUTPUT
         

@@ -918,7 +918,7 @@ app.post('/api/config/import', async (req, res) => {
           const exists = existingTags.some(t => t.name === tag.name)
           
           if (!exists) {
-            await database.createTag(tag.name, tag.color, tag.description)
+            await database.createTag(tag)
             stats.tags.imported++
           } else {
             stats.tags.skipped++

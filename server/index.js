@@ -10,7 +10,6 @@ const processManager = require('./process-manager');
 const serviceEventManager = require('./serviceEventManager');
 
 
-
 const app = express();
 const server = http.createServer(app);
 const wss = new WebSocket.Server({ server });

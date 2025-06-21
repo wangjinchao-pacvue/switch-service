@@ -20,7 +20,8 @@ export const useAppStore = defineStore('app', {
       healthy: 0,
       unhealthy: 0
     },
-    loading: false
+    loading: false,
+    theme: 'light' // 主题模式：light | dark
   }),
 
   actions: {
@@ -179,7 +180,14 @@ export const useAppStore = defineStore('app', {
       try {
         const response = await axios.get('/api/proxy/stats')
         if (response.data.success) {
-          this.proxyStats = response.data.stats
+          // 确保统计数据为数字类型，避免Vue prop类型检查警告
+          this.proxyStats = {
+            total: Number(response.data.stats.total || 0),
+            running: Number(response.data.stats.running || 0),
+            stopped: Number(response.data.stats.stopped || 0),
+            healthy: Number(response.data.stats.healthy || 0),
+            unhealthy: Number(response.data.stats.unhealthy || 0)
+          }
         }
         return response.data
       } catch (error) {
@@ -233,6 +241,40 @@ export const useAppStore = defineStore('app', {
     // 设置loading状态的方法
     setLoading(loading) {
       this.loading = loading
+    },
+
+    // 主题管理
+    initTheme() {
+      // 从localStorage读取保存的主题
+      const savedTheme = localStorage.getItem('app-theme')
+      if (savedTheme && ['light', 'dark'].includes(savedTheme)) {
+        this.theme = savedTheme
+      }
+      this.applyTheme()
+    },
+
+    setTheme(theme) {
+      if (!['light', 'dark'].includes(theme)) return
+      
+      this.theme = theme
+      localStorage.setItem('app-theme', theme)
+      this.applyTheme()
+    },
+
+    toggleTheme() {
+      const newTheme = this.theme === 'light' ? 'dark' : 'light'
+      this.setTheme(newTheme)
+    },
+
+    applyTheme() {
+      const html = document.documentElement
+      if (this.theme === 'dark') {
+        html.classList.add('dark')
+        html.classList.remove('light')
+      } else {
+        html.classList.add('light')
+        html.classList.remove('dark')
+      }
     }
   }
 }) 

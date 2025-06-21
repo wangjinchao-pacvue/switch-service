@@ -9,7 +9,7 @@ class ServiceEventManager {
       this.observers.set(eventType, []);
     }
     this.observers.get(eventType).push(observer);
-    console.log(`Observer subscribed to ${eventType} event`);
+    // 静默订阅，不记录日志
   }
 
   // 取消订阅
@@ -19,7 +19,7 @@ class ServiceEventManager {
       const index = observers.indexOf(observer);
       if (index > -1) {
         observers.splice(index, 1);
-        console.log(`Observer unsubscribed from ${eventType} event`);
+        // 静默取消订阅，不记录日志
       }
     }
   }
@@ -28,12 +28,12 @@ class ServiceEventManager {
   notify(eventType, data) {
     if (this.observers.has(eventType)) {
       const observers = this.observers.get(eventType);
-      console.log(`Notifying ${observers.length} observers of ${eventType} event`);
+      // 静默通知，不记录日志
       observers.forEach(observer => {
         try {
           observer.handleEvent(eventType, data);
         } catch (error) {
-          console.error(`Error in observer for ${eventType}:`, error);
+          console.error(`事件观察者错误 (${eventType}):`, error);
         }
       });
     }

@@ -763,6 +763,42 @@ class Database {
     });
   }
 
+  // 获取请求日志详情
+  async getRequestLogDetails(serviceName, logId) {
+    return new Promise((resolve, reject) => {
+      const sql = `
+        SELECT * FROM proxy_logs 
+        WHERE service_name = ? AND id = ?
+      `;
+      
+      this.db.get(sql, [serviceName, logId], (err, row) => {
+        if (err) {
+          reject(err);
+        } else if (!row) {
+          resolve(null);
+        } else {
+          const logDetails = {
+            id: row.id,
+            serviceName: row.service_name,
+            timestamp: row.timestamp,
+            method: row.method,
+            path: row.path,
+            target: row.target,
+            status: row.status,
+            duration: row.duration,
+            requestHeaders: JSON.parse(row.request_headers || '{}'),
+            requestBody: JSON.parse(row.request_body || 'null'),
+            responseHeaders: JSON.parse(row.response_headers || '{}'),
+            responseBody: JSON.parse(row.response_body || 'null'),
+            error: row.error,
+            createdAt: row.created_at
+          };
+          resolve(logDetails);
+        }
+      });
+    });
+  }
+
   // 清理旧的代理日志（保留最近N条）
   async cleanupOldProxyLogs(keepRecords = 10000) {
     return new Promise((resolve, reject) => {

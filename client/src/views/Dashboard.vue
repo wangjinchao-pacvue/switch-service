@@ -6,9 +6,29 @@
     <el-card class="config-card">
       <template #header>
         <div class="card-header">
-          <span>Eureka配置</span>
+          <div class="card-title-section">
+            <span>{{ showSystemLogs ? '系统日志' : 'Eureka配置' }}</span>
+            <el-button-group size="small" style="margin-left: 12px;">
+              <el-button 
+                :type="!showSystemLogs ? 'primary' : ''"
+                @click="showSystemLogs = false"
+                size="small"
+              >
+                <el-icon><Setting /></el-icon>
+                配置
+              </el-button>
+              <el-button 
+                :type="showSystemLogs ? 'primary' : ''"
+                @click="toggleSystemLogs"
+                size="small"
+              >
+                <el-icon><Document /></el-icon>
+                日志
+              </el-button>
+            </el-button-group>
+          </div>
           <div class="header-actions">
-            <div class="eureka-status">
+            <div v-if="!showSystemLogs" class="eureka-status">
               <el-tag 
                 :type="getEurekaAvailabilityType()" 
                 size="small"
@@ -27,26 +47,132 @@
                 检查连接
               </el-button>
             </div>
-                          <el-button 
-                type="primary" 
-                @click="openEurekaServiceDrawer"
+            <div v-if="showSystemLogs" class="system-log-actions">
+              <el-tag size="small" style="margin-right: 10px;">
+                {{ systemLogs.length }}/500 条日志
+              </el-tag>
+              <el-button
+                type="danger"
+                @click="clearSystemLogs"
                 size="small"
+                :loading="clearingSystemLogs"
+                style="margin-right: 10px;"
               >
-                <el-icon><List /></el-icon>
-                查看服务列表 ({{ appStore.eurekaServices.length }})
+                <el-icon><Delete /></el-icon>
+                清理日志
               </el-button>
+            </div>
+            <el-button 
+              v-if="!showSystemLogs"
+              type="primary" 
+              @click="openEurekaServiceDrawer"
+              size="small"
+            >
+              <el-icon><List /></el-icon>
+              查看服务列表 ({{ appStore.eurekaServices.length }})
+            </el-button>
           </div>
         </div>
       </template>
-      <!-- 运行中服务警告 -->
-      <el-alert
-        v-if="hasRunningServices"
-        title="注意"
-        :description="`当前有 ${runningServicesCount} 个代理服务正在运行，修改Eureka配置可能影响服务稳定性，建议先停止所有服务再修改配置。`"
-        type="warning"
-        :closable="false"
-        style="margin-bottom: 16px;"
-      />
+      
+      <!-- 系统日志视图 -->
+      <div v-if="showSystemLogs" class="system-logs-container">
+        <!-- 日志分类过滤器 -->
+        <div class="log-category-filters">
+          <div class="filter-header">
+            <span>日志分类过滤:</span>
+            <el-button 
+              size="small" 
+              type="primary" 
+              link 
+              @click="toggleAllCategories"
+            >
+              {{ allCategoriesSelected ? '取消全选' : '全选' }}
+            </el-button>
+          </div>
+          <div class="filter-options">
+            <el-checkbox-group v-model="selectedLogCategories" @change="onCategoryChange">
+              <el-checkbox
+                v-for="category in logCategories"
+                :key="category.key"
+                :value="category.key"
+                :disabled="loadingCategories"
+              >
+                <span class="category-option">
+                  <span class="category-icon">{{ category.icon }}</span>
+                  <span class="category-name">{{ category.name }}</span>
+                  <el-tag 
+                    size="small" 
+                    :style="{ 
+                      backgroundColor: category.color, 
+                      color: 'white', 
+                      border: 'none',
+                      marginLeft: '4px'
+                    }"
+                  >
+                    {{ category.count }}
+                  </el-tag>
+                </span>
+              </el-checkbox>
+            </el-checkbox-group>
+          </div>
+        </div>
+        
+        <div class="system-logs-content" ref="systemLogsContainer">
+          <div v-if="filteredSystemLogs.length === 0" class="empty-logs">
+            <el-empty :description="systemLogs.length === 0 ? '暂无系统日志' : '当前分类下暂无日志'" />
+          </div>
+          <div v-else class="log-entries">
+            <div 
+              v-for="log in filteredSystemLogs" 
+              :key="log.id"
+              :class="['log-entry', `log-${log.level}`, `category-${log.category}`]"
+            >
+              <div class="log-content">
+                <div class="log-meta">
+                  <span class="log-timestamp">{{ formatLogTimestamp(log.timestamp) }}</span>
+                  <el-tag 
+                    :type="getLogLevelType(log.level)" 
+                    size="small"
+                    class="log-level"
+                  >
+                    {{ log.level.toUpperCase() }}
+                  </el-tag>
+                  <span class="log-category" :title="getCategoryName(log.category)">
+                    {{ getCategoryIcon(log.category) }}
+                  </span>
+                </div>
+                <div class="log-message">
+                  <span class="log-text">{{ log.message }}</span>
+                </div>
+              </div>
+              <div class="log-actions" v-if="isProxyRequestLog(log)">
+                <el-button 
+                  type="primary" 
+                  size="small" 
+                  link
+                  @click="showSystemLogDetails(log)"
+                >
+                  <el-icon><View /></el-icon>
+                  详情
+                </el-button>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+      
+      <!-- Eureka配置视图 -->
+      <div v-else>
+        <!-- 运行中服务警告 -->
+        <el-alert
+          v-if="hasRunningServices"
+          title="注意"
+          :description="`当前有 ${runningServicesCount} 个代理服务正在运行，修改Eureka配置可能影响服务稳定性，建议先停止所有服务再修改配置。`"
+          type="warning"
+          :closable="false"
+          style="margin-bottom: 16px;"
+        />
       
       <el-form :model="eurekaConfig" label-width="100px">
         <el-row :gutter="20">
@@ -157,6 +283,7 @@
           </el-button-group>
         </el-form-item>
       </el-form>
+      </div>
     </el-card>
 
     <!-- 代理服务管理（占用全屏宽度） -->
@@ -568,13 +695,13 @@
         
         <el-divider />
         
-                 <div class="log-list" ref="logListRef">
-           <div 
-             v-for="log in [...serviceLogs].reverse()" 
-             :key="log?.id || Math.random()"
-             class="log-item"
-             :class="getLogItemClass(log)"
-           >
+                         <div class="log-list" ref="logListRef">
+          <div 
+            v-for="log in serviceLogs" 
+            :key="log?.id || Math.random()"
+            class="log-item"
+            :class="getLogItemClass(log)"
+          >
             <div class="log-header">
               <div class="log-basic-info">
                                  <el-tag 
@@ -588,8 +715,20 @@
                   {{ log.duration }}ms
                 </span>
               </div>
-              <div class="log-time">
-                {{ formatTime(log?.timestamp) }}
+              <div class="log-actions">
+                <el-button 
+                  type="primary" 
+                  size="small" 
+                  link
+                  @click="showRequestDetails(log)"
+                  v-if="log?.id"
+                >
+                  <el-icon><View /></el-icon>
+                  详情
+                </el-button>
+                <div class="log-time">
+                  {{ formatTime(log?.timestamp) }}
+                </div>
               </div>
             </div>
             
@@ -1038,6 +1177,230 @@
       </template>
     </el-dialog>
 
+    <!-- 请求详情对话框 -->
+    <el-dialog 
+      v-model="showRequestDetailsDialog" 
+      title="请求详情" 
+      width="900px"
+      :close-on-click-modal="false"
+    >
+      <div class="request-details-content" v-if="currentRequestDetails">
+        <!-- 基本信息 -->
+        <div class="details-section">
+          <h3>基本信息</h3>
+          <el-descriptions :column="2" border>
+            <el-descriptions-item label="请求方法">
+              <el-tag :type="getMethodTagType(currentRequestDetails.method)">
+                {{ currentRequestDetails.method }}
+              </el-tag>
+            </el-descriptions-item>
+            <el-descriptions-item label="状态码">
+              <el-tag :type="getStatusTagType(currentRequestDetails.status)">
+                {{ currentRequestDetails.status }}
+              </el-tag>
+            </el-descriptions-item>
+            <el-descriptions-item label="请求路径">
+              <code>{{ currentRequestDetails.path }}</code>
+            </el-descriptions-item>
+            <el-descriptions-item label="目标地址">
+              <code>{{ currentRequestDetails.target }}</code>
+            </el-descriptions-item>
+            <el-descriptions-item label="响应时间">
+              <span>{{ currentRequestDetails.duration }}ms</span>
+            </el-descriptions-item>
+            <el-descriptions-item label="请求时间">
+              <span>{{ formatFullTime(currentRequestDetails.timestamp) }}</span>
+            </el-descriptions-item>
+          </el-descriptions>
+        </div>
+
+        <!-- 请求头 -->
+        <div class="details-section">
+          <h3>请求头</h3>
+          <div class="headers-container">
+            <el-table 
+              :data="formatHeaders(currentRequestDetails.requestHeaders)" 
+              size="small"
+              max-height="200"
+            >
+              <el-table-column prop="name" label="名称" width="200" />
+              <el-table-column prop="value" label="值" show-overflow-tooltip />
+            </el-table>
+          </div>
+        </div>
+
+        <!-- 请求体 -->
+        <div class="details-section" v-if="currentRequestDetails.requestBody !== null">
+          <div class="section-header">
+            <h3>请求体</h3>
+            <el-button size="small" @click="copyToClipboard(formatJson(currentRequestDetails.requestBody))">
+              <el-icon><CopyDocument /></el-icon>
+              复制
+            </el-button>
+          </div>
+          <div class="code-container">
+            <pre class="code-block">{{ formatJson(currentRequestDetails.requestBody) }}</pre>
+          </div>
+        </div>
+
+        <!-- 响应头 -->
+        <div class="details-section">
+          <h3>响应头</h3>
+          <div class="headers-container">
+            <el-table 
+              :data="formatHeaders(currentRequestDetails.responseHeaders)" 
+              size="small"
+              max-height="200"
+            >
+              <el-table-column prop="name" label="名称" width="200" />
+              <el-table-column prop="value" label="值" show-overflow-tooltip />
+            </el-table>
+          </div>
+        </div>
+
+        <!-- 响应体 -->
+        <div class="details-section" v-if="currentRequestDetails.responseBody !== null">
+          <div class="section-header">
+            <h3>响应体</h3>
+            <el-button size="small" @click="copyToClipboard(formatJson(currentRequestDetails.responseBody))">
+              <el-icon><CopyDocument /></el-icon>
+              复制
+            </el-button>
+          </div>
+          <div class="code-container">
+            <pre class="code-block">{{ formatJson(currentRequestDetails.responseBody) }}</pre>
+          </div>
+        </div>
+
+        <!-- 错误信息 -->
+        <div class="details-section" v-if="currentRequestDetails.error">
+          <h3>错误信息</h3>
+          <el-alert 
+            :title="currentRequestDetails.error" 
+            type="error" 
+            :closable="false"
+            show-icon
+          />
+        </div>
+      </div>
+      
+      <div v-else class="loading-details">
+        <el-skeleton :rows="8" animated />
+      </div>
+    </el-dialog>
+
+    <!-- 系统日志详情对话框 -->
+    <el-dialog 
+      v-model="showSystemLogDetailsDialog" 
+      title="请求详情" 
+      width="900px"
+      :close-on-click-modal="false"
+    >
+      <div class="system-log-details-content" v-if="currentSystemLogDetails">
+        <!-- 基本信息 -->
+        <div class="details-section">
+          <h3>基本信息</h3>
+          <el-descriptions :column="2" border>
+            <el-descriptions-item label="请求方法">
+              <el-tag :type="getMethodTagType(currentSystemLogDetails.method)">
+                {{ currentSystemLogDetails.method }}
+              </el-tag>
+            </el-descriptions-item>
+            <el-descriptions-item label="状态码">
+              <el-tag :type="getStatusTagType(currentSystemLogDetails.status)">
+                {{ currentSystemLogDetails.status }}
+              </el-tag>
+            </el-descriptions-item>
+            <el-descriptions-item label="请求路径">
+              <code>{{ currentSystemLogDetails.path }}</code>
+            </el-descriptions-item>
+            <el-descriptions-item label="目标地址">
+              <code>{{ currentSystemLogDetails.target }}</code>
+            </el-descriptions-item>
+            <el-descriptions-item label="响应时间">
+              <span>{{ currentSystemLogDetails.duration }}ms</span>
+            </el-descriptions-item>
+            <el-descriptions-item label="请求时间">
+              <span>{{ formatFullTime(currentSystemLogDetails.timestamp) }}</span>
+            </el-descriptions-item>
+          </el-descriptions>
+        </div>
+
+        <!-- 请求头 -->
+        <div class="details-section">
+          <h3>请求头</h3>
+          <div class="headers-container">
+            <el-table 
+              :data="formatHeaders(currentSystemLogDetails.requestHeaders)" 
+              size="small"
+              max-height="200"
+            >
+              <el-table-column prop="name" label="名称" width="200" />
+              <el-table-column prop="value" label="值" show-overflow-tooltip />
+            </el-table>
+          </div>
+        </div>
+
+        <!-- 请求体 -->
+        <div class="details-section" v-if="currentSystemLogDetails.requestBody !== null">
+          <div class="section-header">
+            <h3>请求体</h3>
+            <el-button size="small" @click="copyToClipboard(formatJson(currentSystemLogDetails.requestBody))">
+              <el-icon><CopyDocument /></el-icon>
+              复制
+            </el-button>
+          </div>
+          <div class="code-container">
+            <pre class="code-block">{{ formatJson(currentSystemLogDetails.requestBody) }}</pre>
+          </div>
+        </div>
+
+        <!-- 响应头 -->
+        <div class="details-section">
+          <h3>响应头</h3>
+          <div class="headers-container">
+            <el-table 
+              :data="formatHeaders(currentSystemLogDetails.responseHeaders)" 
+              size="small"
+              max-height="200"
+            >
+              <el-table-column prop="name" label="名称" width="200" />
+              <el-table-column prop="value" label="值" show-overflow-tooltip />
+            </el-table>
+          </div>
+        </div>
+
+        <!-- 响应体 -->
+        <div class="details-section" v-if="currentSystemLogDetails.responseBody !== null">
+          <div class="section-header">
+            <h3>响应体</h3>
+            <el-button size="small" @click="copyToClipboard(formatJson(currentSystemLogDetails.responseBody))">
+              <el-icon><CopyDocument /></el-icon>
+              复制
+            </el-button>
+          </div>
+          <div class="code-container">
+            <pre class="code-block">{{ formatJson(currentSystemLogDetails.responseBody) }}</pre>
+          </div>
+        </div>
+
+        <!-- 错误信息 -->
+        <div class="details-section" v-if="currentSystemLogDetails.error">
+          <h3>错误信息</h3>
+          <el-alert 
+            :title="currentSystemLogDetails.error" 
+            type="error" 
+            :closable="false"
+            show-icon
+          />
+        </div>
+      </div>
+      
+      <div v-else class="loading-details">
+        <el-skeleton :rows="8" animated />
+      </div>
+    </el-dialog>
+
     <!-- 标签管理对话框 -->
     <el-dialog v-model="showTagManagerDialog" title="标签管理" width="800px">
       <div class="tag-manager">
@@ -1189,7 +1552,7 @@
 import { ref, reactive, onMounted, onUnmounted, computed, watch, nextTick } from 'vue'
 import { useAppStore } from '../stores/app'
 import { ElMessage, ElMessageBox } from 'element-plus'
-import { List, Plus, Search, Connection, WarningFilled, Refresh, Setting, Link, Management, Download, Upload, InfoFilled, ArrowDown, ArrowUp } from '@element-plus/icons-vue'
+import { List, Plus, Search, Connection, WarningFilled, Refresh, Setting, Link, Management, Download, Upload, InfoFilled, ArrowDown, ArrowUp, Document, Delete, View, CopyDocument } from '@element-plus/icons-vue'
 
 const appStore = useAppStore()
 
@@ -1278,6 +1641,27 @@ const showTagManagerDialog = ref(false)
 const showCreateTagDialog = ref(false)
 const showServiceTagDialog = ref(false)
 const currentTagService = ref(null)
+
+// 系统日志相关
+const showSystemLogs = ref(false)
+const systemLogs = ref([])
+const clearingSystemLogs = ref(false)
+const systemLogsContainer = ref()
+
+// 日志分类相关
+const logCategories = ref([])
+const selectedLogCategories = ref([])
+const loadingCategories = ref(false)
+
+// 请求详情相关
+const showRequestDetailsDialog = ref(false)
+const currentRequestDetails = ref(null)
+const loadingRequestDetails = ref(false)
+
+// 系统日志详情相关
+const showSystemLogDetailsDialog = ref(false)
+const currentSystemLogDetails = ref(null)
+
 const editingTag = reactive({
   id: '',
   name: '',
@@ -1497,7 +1881,17 @@ const fetchPortStats = async () => {
     const response = await fetch('/api/ports/usage')
     const data = await response.json()
     if (data.success) {
-      portStats.value = data.stats
+      // 确保数字类型正确，避免Vue prop类型检查警告
+      portStats.value = {
+        ...data.stats,
+        startPort: Number(data.stats.startPort),
+        endPort: Number(data.stats.endPort),
+        totalPorts: Number(data.stats.totalPorts),
+        usedCount: Number(data.stats.usedCount),
+        availableCount: Number(data.stats.availableCount),
+        usedPorts: data.stats.usedPorts.map(port => Number(port)),
+        availablePorts: data.stats.availablePorts.map(port => Number(port))
+      }
     }
   } catch (error) {
     console.error('获取端口使用统计失败:', error)
@@ -1510,10 +1904,16 @@ const fetchPortRangeConfig = async () => {
     const response = await fetch('/api/config/port-range')
     const data = await response.json()
     if (data.success && data.data) {
-      currentPortRange.value = data.data
-      // 同步表单数据
-      portRangeForm.startPort = data.data.startPort
-      portRangeForm.endPort = data.data.endPort
+      // 确保数字类型正确
+      currentPortRange.value = {
+        ...data.data,
+        startPort: Number(data.data.startPort),
+        endPort: Number(data.data.endPort),
+        totalPorts: Number(data.data.totalPorts)
+      }
+      // 同步表单数据，确保数字类型
+      portRangeForm.startPort = Number(data.data.startPort)
+      portRangeForm.endPort = Number(data.data.endPort)
       portRangeForm.description = data.data.description || ''
     }
   } catch (error) {
@@ -2090,6 +2490,21 @@ const availableTagsForService = computed(() => {
   return availableTags.value.filter(tag => !serviceTags.includes(tag.name))
 })
 
+// 日志分类相关计算属性
+const filteredSystemLogs = computed(() => {
+  if (selectedLogCategories.value.length === 0) {
+    return systemLogs.value
+  }
+  return systemLogs.value.filter(log => 
+    selectedLogCategories.value.includes(log.category)
+  )
+})
+
+const allCategoriesSelected = computed(() => {
+  return logCategories.value.length > 0 && 
+         selectedLogCategories.value.length === logCategories.value.length
+})
+
 
 
 const isIndeterminate = computed(() => {
@@ -2493,10 +2908,11 @@ const handleLogMessage = (message) => {
       nextTick(() => scrollToTop())
       break
     case 'new_log':
-      serviceLogs.value.push(message.log)
-      // 保持最多1000条日志
+      // 将新日志添加到数组开头，保持最新的在最上面
+      serviceLogs.value.unshift(message.log)
+      // 保持最多1000条日志，从末尾删除旧日志
       if (serviceLogs.value.length > 1000) {
-        serviceLogs.value.splice(0, serviceLogs.value.length - 1000)
+        serviceLogs.value.splice(1000)
       }
       nextTick(() => scrollToTop())
       break
@@ -2604,6 +3020,225 @@ const formatJson = (data) => {
   } catch {
     return data.toString()
   }
+}
+
+// 显示请求详情
+const showRequestDetails = async (log) => {
+  if (!log?.id || !currentLogService.value) return
+  
+  loadingRequestDetails.value = true
+  showRequestDetailsDialog.value = true
+  currentRequestDetails.value = null
+  
+  try {
+    const response = await fetch(`/api/proxy/${currentLogService.value.serviceName}/logs/${log.id}/details`)
+    const data = await response.json()
+    
+    if (data.success) {
+      currentRequestDetails.value = data.data
+    } else {
+      ElMessage.error(data.error || '获取请求详情失败')
+      showRequestDetailsDialog.value = false
+    }
+  } catch (error) {
+    console.error('获取请求详情失败:', error)
+    ElMessage.error('获取请求详情失败: ' + error.message)
+    showRequestDetailsDialog.value = false
+  } finally {
+    loadingRequestDetails.value = false
+  }
+}
+
+// 格式化完整时间
+const formatFullTime = (timestamp) => {
+  if (!timestamp) return '--'
+  
+  try {
+    return new Date(timestamp).toLocaleString('zh-CN', {
+      year: 'numeric',
+      month: '2-digit',
+      day: '2-digit',
+      hour: '2-digit',
+      minute: '2-digit',
+      second: '2-digit',
+      hour12: false
+    })
+  } catch (error) {
+    return timestamp.toString()
+  }
+}
+
+// 格式化请求头为表格数据
+const formatHeaders = (headers) => {
+  if (!headers || typeof headers !== 'object') return []
+  
+  return Object.entries(headers).map(([name, value]) => ({
+    name,
+    value: Array.isArray(value) ? value.join(', ') : String(value)
+  }))
+}
+
+// 获取HTTP方法的标签类型
+const getMethodTagType = (method) => {
+  switch (method?.toUpperCase()) {
+    case 'GET': return 'success'
+    case 'POST': return 'primary'
+    case 'PUT': return 'warning'
+    case 'DELETE': return 'danger'
+    case 'PATCH': return 'info'
+    default: return 'info'
+  }
+}
+
+// 获取状态码的标签类型
+const getStatusTagType = (status) => {
+  if (!status) return 'info'
+  const statusCode = parseInt(status)
+  if (statusCode >= 200 && statusCode < 300) return 'success'
+  if (statusCode >= 300 && statusCode < 400) return 'warning'
+  if (statusCode >= 400 && statusCode < 500) return 'danger'
+  if (statusCode >= 500) return 'danger'
+  return 'info'
+}
+
+// 复制到剪贴板
+const copyToClipboard = async (text) => {
+  try {
+    await navigator.clipboard.writeText(text)
+    ElMessage.success('已复制到剪贴板')
+  } catch (error) {
+    console.error('复制失败:', error)
+    ElMessage.error('复制失败')
+  }
+}
+
+// 判断是否为代理请求日志（只有请求开始的日志显示详情按钮）
+const isProxyRequestLog = (log) => {
+  if (!log || !log.message) return false
+  
+  // 只有"Proxying"开头的日志显示详情按钮，响应日志不显示
+  return log.message.includes('Proxying') && !log.message.includes('Proxy response')
+}
+
+// 显示系统日志详情
+const showSystemLogDetails = async (log) => {
+  if (!log) return
+  
+  // 从日志参数中提取request UUID
+  let requestUuid = null
+  if (log.args && log.args.length > 0) {
+    for (const arg of log.args) {
+      // 尝试解析JSON参数
+      try {
+        const parsedArg = typeof arg === 'string' ? JSON.parse(arg) : arg
+        if (parsedArg && parsedArg.requestUuid) {
+          requestUuid = parsedArg.requestUuid
+          break
+        }
+      } catch (e) {
+        // 如果不是JSON，检查是否直接是UUID格式
+        if (typeof arg === 'string' && arg.startsWith('req_')) {
+          requestUuid = arg
+          break
+        }
+      }
+    }
+  }
+  
+  if (!requestUuid) {
+    ElMessage.warning('无法找到请求UUID，无法显示详情')
+    return
+  }
+  
+  try {
+    // 使用新的API根据UUID获取请求详情
+    const response = await fetch(`/api/request/${requestUuid}/details`)
+    if (response.ok) {
+      const data = await response.json()
+      if (data.success) {
+        currentSystemLogDetails.value = data.details
+        showSystemLogDetailsDialog.value = true
+        return
+      }
+    }
+    
+    // 如果新API失败，显示错误信息
+    ElMessage.error('无法获取请求详情')
+  } catch (error) {
+    console.error('获取请求详情失败:', error)
+    ElMessage.error('获取请求详情失败')
+  }
+}
+
+// 从日志中提取代理信息
+const extractProxyInfo = (log) => {
+  if (!log || !log.message) return null
+  
+  // 尝试从日志消息中提取代理请求信息
+  const proxyPattern = /Proxying\s+(\w+)\s+(.+?)\s+to\s+(.+)/
+  const match = log.message.match(proxyPattern)
+  
+  if (match) {
+    // 尝试从参数中提取更多信息
+    let logId = null
+    let serviceName = extractServiceName(match[3])
+    
+    // 如果有参数，尝试从中提取日志ID或服务名
+    if (log.args && log.args.length > 0) {
+      for (const arg of log.args) {
+        if (typeof arg === 'string') {
+          // 尝试匹配日志ID格式
+          if (arg.match(/^\d+$/)) {
+            logId = arg
+          }
+          // 尝试匹配服务名
+          if (arg.includes('-') && !arg.includes('/') && !arg.includes('http')) {
+            serviceName = arg
+          }
+        }
+      }
+    }
+    
+    return {
+      method: match[1],
+      path: match[2],
+      target: match[3],
+      serviceName,
+      logId
+    }
+  }
+  
+  return null
+}
+
+// 从目标URL中提取服务名
+const extractServiceName = (target) => {
+  if (!target) return 'unknown'
+  
+  try {
+    const url = new URL(target)
+    const pathParts = url.pathname.split('/').filter(Boolean)
+    return pathParts[pathParts.length - 1] || 'unknown'
+  } catch {
+    return 'unknown'
+  }
+}
+
+// 格式化参数
+const formatArgument = (arg) => {
+  if (arg === null || arg === undefined) {
+    return 'null'
+  }
+  
+  if (typeof arg === 'object') {
+    try {
+      return JSON.stringify(arg, null, 2)
+    } catch {
+      return String(arg)
+    }
+  }
+  
+  return String(arg)
 }
 
 // WebSocket连接管理
@@ -2719,6 +3354,30 @@ const handleWebSocketMessage = (message) => {
         appStore.eurekaServices = []
       }
       break
+    case 'system_log':
+      // 系统日志更新
+      systemLogs.value.push(message.log)
+      // 保持最大500条日志
+      if (systemLogs.value.length > 500) {
+        systemLogs.value.shift()
+      }
+      // 自动滚动到底部
+      nextTick(() => {
+        scrollSystemLogsToBottom()
+      })
+      break
+    case 'system_logs_history':
+      // 系统日志历史记录
+      systemLogs.value = message.logs || []
+      nextTick(() => {
+        scrollSystemLogsToBottom()
+      })
+      break
+    case 'system_logs_cleared':
+      // 系统日志已清理
+      systemLogs.value = []
+      ElMessage.success('系统日志已清理')
+      break
     case 'proxy_started':
     case 'proxy_stopped':
     case 'proxy_created':
@@ -2831,9 +3490,30 @@ const handleFileImport = async (event) => {
       throw new Error('无效的配置文件格式')
     }
     
+    // 构建导入信息显示
+    const importInfo = [
+      `• 版本：${importData.version}`,
+      `• 导出时间：${new Date(importData.exportTime).toLocaleString()}`,
+      `• 代理服务：${importData.data.proxyServices?.length || 0} 个`,
+      `• 标签：${importData.data.tags?.length || 0} 个`
+    ]
+    
+    // 添加可选配置信息
+    if (importData.data.autoStartConfig) {
+      importInfo.push(`• 自动启动配置：包含 ${importData.data.autoStartConfig.serviceIds?.length || 0} 个服务`)
+    }
+    if (importData.data.portRangeConfig) {
+      importInfo.push(`• 端口范围配置：${importData.data.portRangeConfig.startPort}-${importData.data.portRangeConfig.endPort}`)
+    }
+    
+    // 添加排除的配置说明
+    if (importData.excludedConfigs && importData.excludedConfigs.length > 0) {
+      importInfo.push(`\n已排除配置：${importData.excludedConfigs.join('、')}`)
+    }
+    
     // 显示确认对话框
     const confirmResult = await ElMessageBox.confirm(
-      `确定要导入配置吗？\n\n导入信息：\n• 版本：${importData.version}\n• 导出时间：${new Date(importData.exportTime).toLocaleString()}\n• 服务数量：${importData.data.proxyServices?.length || 0}\n• 标签数量：${importData.data.tags?.length || 0}\n\n注意：重复的服务和标签将被跳过`,
+      `确定要导入配置吗？\n\n导入信息：\n${importInfo.join('\n')}\n\n注意：重复的服务和标签将被跳过`,
       '确认导入配置',
       {
         type: 'warning',
@@ -2899,6 +3579,20 @@ const importConfig = async (importData) => {
       messages.push(`• ${stats.tags.errors} 个标签导入失败`)
     }
     
+    if (stats.autoStart && stats.autoStart.imported > 0) {
+      messages.push(`• 成功导入自动启动配置`)
+    }
+    if (stats.autoStart && stats.autoStart.errors > 0) {
+      messages.push(`• 自动启动配置导入失败`)
+    }
+    
+    if (stats.portRange && stats.portRange.imported > 0) {
+      messages.push(`• 成功导入端口范围配置`)
+    }
+    if (stats.portRange && stats.portRange.errors > 0) {
+      messages.push(`• 端口范围配置导入失败`)
+    }
+    
 
     
     ElMessageBox.alert(
@@ -2919,6 +3613,135 @@ const importConfig = async (importData) => {
     
   } catch (error) {
     throw error
+  }
+}
+
+// 系统日志相关方法
+const toggleSystemLogs = async () => {
+  showSystemLogs.value = true
+  if (showSystemLogs.value) {
+    // 加载日志分类
+    await loadLogCategories()
+    
+    // 订阅系统日志
+    if (websocket && websocket.readyState === WebSocket.OPEN) {
+      websocket.send(JSON.stringify({
+        type: 'subscribe_system_logs',
+        categories: selectedLogCategories.value.length > 0 ? selectedLogCategories.value : null
+      }))
+    }
+  }
+}
+
+const clearSystemLogs = async () => {
+  try {
+    clearingSystemLogs.value = true
+    
+    const response = await fetch('/api/system/logs', {
+      method: 'DELETE'
+    })
+    
+    if (!response.ok) {
+      throw new Error('清理失败')
+    }
+    
+    const result = await response.json()
+    if (!result.success) {
+      throw new Error(result.error)
+    }
+    
+    // 清理成功的消息会通过WebSocket广播
+  } catch (error) {
+    console.error('清理系统日志失败:', error)
+    ElMessage.error(`清理系统日志失败: ${error.message}`)
+  } finally {
+    clearingSystemLogs.value = false
+  }
+}
+
+const scrollSystemLogsToBottom = () => {
+  if (systemLogsContainer.value) {
+    systemLogsContainer.value.scrollTop = systemLogsContainer.value.scrollHeight
+  }
+}
+
+const formatLogTimestamp = (timestamp) => {
+  try {
+    return new Date(timestamp).toLocaleString('zh-CN', {
+      month: '2-digit',
+      day: '2-digit',
+      hour: '2-digit',
+      minute: '2-digit',
+      second: '2-digit',
+      fractionalSecondDigits: 3
+    })
+  } catch (error) {
+    return timestamp
+  }
+}
+
+const getLogLevelType = (level) => {
+  switch (level) {
+    case 'error': return 'danger'
+    case 'warn': return 'warning'
+    case 'info': return 'info'
+    default: return 'info'
+  }
+}
+
+// 日志分类相关方法
+const loadLogCategories = async () => {
+  try {
+    loadingCategories.value = true
+    const response = await fetch('/api/system/logs/categories')
+    if (response.ok) {
+      const result = await response.json()
+      if (result.success) {
+        logCategories.value = result.categories
+        // 默认只选中"服务"分类
+        if (selectedLogCategories.value.length === 0) {
+          const serviceCategory = result.categories.find(c => c.key === 'service')
+          if (serviceCategory) {
+            selectedLogCategories.value = ['service']
+          } else {
+            selectedLogCategories.value = result.categories.map(c => c.key)
+          }
+        }
+      }
+    }
+  } catch (error) {
+    console.error('加载日志分类失败:', error)
+  } finally {
+    loadingCategories.value = false
+  }
+}
+
+const getCategoryName = (categoryKey) => {
+  const category = logCategories.value.find(c => c.key === categoryKey)
+  return category ? category.name : categoryKey
+}
+
+const getCategoryIcon = (categoryKey) => {
+  const category = logCategories.value.find(c => c.key === categoryKey)
+  return category ? category.icon : '📝'
+}
+
+const toggleAllCategories = () => {
+  if (allCategoriesSelected.value) {
+    selectedLogCategories.value = []
+  } else {
+    selectedLogCategories.value = logCategories.value.map(c => c.key)
+  }
+  onCategoryChange()
+}
+
+const onCategoryChange = () => {
+  // 更新WebSocket订阅
+  if (websocket && websocket.readyState === WebSocket.OPEN) {
+    websocket.send(JSON.stringify({
+      type: 'update_log_categories',
+      categories: selectedLogCategories.value.length > 0 ? selectedLogCategories.value : null
+    }))
   }
 }
 
@@ -2950,6 +3773,12 @@ onUnmounted(() => {
   
   // 关闭WebSocket连接
   if (websocket) {
+    // 取消系统日志订阅
+    if (websocket.readyState === WebSocket.OPEN) {
+      websocket.send(JSON.stringify({
+        type: 'unsubscribe_system_logs'
+      }))
+    }
     websocket.close()
     websocket = null
   }
@@ -2961,8 +3790,6 @@ onUnmounted(() => {
   padding: 20px;
 }
 
-
-
 .config-card {
   margin-bottom: 20px;
 }
@@ -2970,6 +3797,166 @@ onUnmounted(() => {
 .card-header {
   display: flex;
   justify-content: space-between;
+  align-items: center;
+}
+
+.card-title-section {
+  display: flex;
+  align-items: center;
+}
+
+/* 系统日志样式 */
+.system-logs-container {
+  height: 500px;
+  border: 1px solid var(--border-color);
+  border-radius: 4px;
+  background: var(--bg-color-secondary);
+  display: flex;
+  flex-direction: column;
+}
+
+/* 日志分类过滤器样式 */
+.log-category-filters {
+  padding: 12px;
+  border-bottom: 1px solid var(--border-color);
+  background: var(--card-bg);
+}
+
+.filter-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 8px;
+  font-weight: 500;
+  color: var(--text-color);
+}
+
+.filter-options {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+}
+
+.category-option {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.category-icon {
+  font-size: 14px;
+}
+
+.category-name {
+  font-size: 12px;
+  color: var(--text-color-secondary);
+}
+
+.system-logs-content {
+  flex: 1;
+  overflow-y: auto;
+  padding: 8px;
+  font-family: 'Consolas', 'Monaco', 'Courier New', monospace;
+  font-size: 12px;
+  line-height: 1.4;
+}
+
+.empty-logs {
+  height: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.log-entries {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.log-entry {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: 12px;
+  padding: 4px 8px;
+  border-radius: 3px;
+  background: var(--card-bg);
+  border-left: 3px solid var(--border-color);
+  transition: all 0.2s;
+}
+
+.log-entry:hover {
+  background: var(--hover-bg);
+}
+
+.log-entry.log-error {
+  border-left-color: #f56c6c;
+  background: var(--danger-bg);
+}
+
+.log-entry.log-warn {
+  border-left-color: #e6a23c;
+  background: var(--warning-bg);
+}
+
+.log-entry.log-info {
+  border-left-color: #409eff;
+  background: var(--info-bg);
+}
+
+.log-meta {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-shrink: 0;
+}
+
+.log-category {
+  font-size: 14px;
+  margin-left: 4px;
+  min-width: 140px;
+}
+
+.log-timestamp {
+  color: var(--text-color-tertiary);
+  font-size: 11px;
+}
+
+.log-level {
+  font-size: 10px !important;
+  height: 18px !important;
+  line-height: 16px !important;
+}
+
+.log-message {
+  flex: 1;
+  min-width: 0;
+}
+
+.log-text {
+  color: var(--text-color);
+  word-break: break-all;
+}
+
+.log-args {
+  margin-top: 2px;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+}
+
+.log-arg {
+  background: var(--bg-color-tertiary);
+  padding: 1px 4px;
+  border-radius: 2px;
+  font-size: 11px;
+  color: var(--text-color-secondary);
+  word-break: break-all;
+}
+
+.system-log-actions {
+  display: flex;
   align-items: center;
 }
 
@@ -2988,28 +3975,32 @@ onUnmounted(() => {
 .stat-item {
   padding: 8px 12px;
   border-radius: 6px;
-  background: #f5f7fa;
+  background: var(--bg-color-secondary);
   min-width: 60px;
 }
 
 .stat-running {
-  background: #e8f5e8;
-  color: #67c23a;
+  background: rgba(82, 196, 26, 0.15);
+  color: #52c41a;
+  border: 1px solid rgba(82, 196, 26, 0.3);
 }
 
 .stat-healthy {
-  background: #e8f5e8;
-  color: #67c23a;
+  background: rgba(82, 196, 26, 0.15);
+  color: #52c41a;
+  border: 1px solid rgba(82, 196, 26, 0.3);
 }
 
 .stat-unhealthy {
-  background: #fef0f0;
-  color: #f56c6c;
+  background: rgba(255, 77, 79, 0.15);
+  color: #ff4d4f;
+  border: 1px solid rgba(255, 77, 79, 0.3);
 }
 
 .stat-stopped {
-  background: #f0f9ff;
-  color: #909399;
+  background: rgba(140, 140, 140, 0.15);
+  color: #8c8c8c;
+  border: 1px solid rgba(140, 140, 140, 0.3);
 }
 
 .header-actions {
@@ -3029,7 +4020,7 @@ onUnmounted(() => {
 }
 
 .port-stats-summary {
-  background: #f8f9fa;
+  background: var(--bg-color-secondary);
   padding: 20px;
   border-radius: 8px;
   margin-bottom: 20px;
@@ -3065,10 +4056,10 @@ onUnmounted(() => {
 }
 
 .docker-command {
-  border: 1px solid #e4e7ed;
+  border: 1px solid var(--border-color);
   border-radius: 6px;
   padding: 12px;
-  background: #f8f9fa;
+  background: var(--bg-color-secondary);
 }
 
 .port-range-tip {
@@ -3101,12 +4092,13 @@ onUnmounted(() => {
 }
 
 .service-item:hover {
-  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.1);
+  box-shadow: 0 4px 12px var(--shadow-color);
 }
 
 .service-item.selected {
-  border: 2px solid #409eff;
-  box-shadow: 0 2px 8px rgba(64, 158, 255, 0.2);
+  border: 2px solid #4a9eff;
+  box-shadow: 0 2px 12px rgba(74, 158, 255, 0.3);
+  background: rgba(74, 158, 255, 0.05);
 }
 
 .service-header {
@@ -3117,7 +4109,7 @@ onUnmounted(() => {
 
 .service-info h3 {
   margin: 0 0 8px 0;
-  color: #303133;
+  color: var(--text-color);
 }
 
 .service-actions {
@@ -3133,7 +4125,7 @@ onUnmounted(() => {
 
 .service-detail p {
   margin: 0 0 8px 0;
-  color: #606266;
+  color: var(--text-color-secondary);
   font-size: 14px;
 }
 
@@ -3145,11 +4137,11 @@ onUnmounted(() => {
 
 .target-switch label {
   font-size: 14px;
-  color: #606266;
+  color: var(--text-color-secondary);
 }
 
 .form-help {
-  color: #909399;
+  color: var(--text-color-tertiary);
   font-size: 12px;
   margin-top: 4px;
   display: block;
@@ -3160,6 +4152,13 @@ onUnmounted(() => {
   justify-content: center;
   align-items: center;
   height: 300px;
+  color: var(--text-color-secondary);
+}
+
+.empty-state .el-icon {
+  font-size: 48px;
+  margin-bottom: 16px;
+  color: var(--text-color-tertiary);
 }
 
 /* 抽屉样式 */
@@ -3172,7 +4171,7 @@ onUnmounted(() => {
 
 .drawer-header h3 {
   margin: 0;
-  color: #303133;
+  color: var(--text-color);
 }
 
 .drawer-actions {
@@ -3232,7 +4231,7 @@ onUnmounted(() => {
 
 .service-title h4 {
   margin: 0;
-  color: #303133;
+  color: var(--text-color);
   font-size: 16px;
 }
 
@@ -3246,7 +4245,7 @@ onUnmounted(() => {
   display: flex;
   align-items: center;
   gap: 8px;
-  color: #606266;
+  color: var(--text-color-secondary);
   font-size: 14px;
 }
 
@@ -3307,12 +4306,12 @@ onUnmounted(() => {
 }
 
 .heartbeat-header:hover {
-  background-color: #f5f7fa;
+  background-color: var(--hover-bg);
 }
 
 .heartbeat-header h3 {
   margin: 0;
-  color: #303133;
+  color: var(--text-color);
 }
 
 /* 心跳图表样式 */
@@ -3322,15 +4321,15 @@ onUnmounted(() => {
 
 .heartbeat-section h3 {
   margin: 0 0 16px 0;
-  color: #303133;
+  color: var(--text-color);
   font-size: 18px;
 }
 
 .heartbeat-chart-container {
-  background: #f8f9fa;
+  background: var(--bg-color-secondary);
   border-radius: 8px;
   padding: 20px;
-  border: 1px solid #e4e7ed;
+  border: 1px solid var(--border-color);
 }
 
 .heartbeat-chart {
@@ -3340,9 +4339,9 @@ onUnmounted(() => {
 }
 
 .heartbeat-chart canvas {
-  border: 1px solid #dcdfe6;
+  border: 1px solid var(--border-color);
   border-radius: 4px;
-  background: white;
+  background: var(--card-bg);
 }
 
 .heartbeat-legend {
@@ -3356,7 +4355,7 @@ onUnmounted(() => {
   align-items: center;
   gap: 8px;
   font-size: 14px;
-  color: #606266;
+  color: var(--text-color-secondary);
 }
 
 .legend-color {
@@ -3382,7 +4381,7 @@ onUnmounted(() => {
   justify-content: space-between;
   align-items: center;
   padding: 16px 0;
-  background: #f5f7fa;
+  background: var(--bg-color-secondary);
   border-radius: 8px;
   padding: 16px;
   margin-bottom: 16px;
@@ -3402,7 +4401,7 @@ onUnmounted(() => {
 
 .status-label {
   font-size: 12px;
-  color: #666;
+  color: var(--text-color-secondary);
   font-weight: 500;
 }
 
@@ -3415,23 +4414,23 @@ onUnmounted(() => {
   flex: 1;
   overflow-y: auto;
   max-height: calc(100vh - 200px);
-  border: 1px solid #ebeef5;
+  border: 1px solid var(--border-color);
   border-radius: 8px;
   padding: 12px;
-  background: #fff;
+  background: var(--card-bg);
 }
 
 .log-item {
-  border: 1px solid #ebeef5;
+  border: 1px solid var(--border-color);
   border-radius: 8px;
   margin-bottom: 12px;
   padding: 16px;
-  background: #fff;
+  background: var(--card-bg);
   transition: all 0.3s ease;
 }
 
 .log-item:hover {
-  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.1);
+  box-shadow: 0 2px 8px var(--shadow-color);
 }
 
 .log-success-item {
@@ -3440,7 +4439,7 @@ onUnmounted(() => {
 
 .log-error-item {
   border-left: 4px solid #f56c6c;
-  background: #fef0f0;
+  background: var(--danger-bg);
 }
 
 .log-info-item {
@@ -3462,21 +4461,21 @@ onUnmounted(() => {
 
 .log-path {
   font-family: 'Monaco', 'Menlo', 'Ubuntu Mono', monospace;
-  background: #f1f2f3;
+  background: var(--bg-color-tertiary);
   padding: 2px 6px;
   border-radius: 4px;
   font-size: 13px;
-  color: #333;
+  color: var(--text-color);
 }
 
 .log-duration {
-  color: #909399;
+  color: var(--text-color-tertiary);
   font-size: 12px;
 }
 
 .log-time {
   font-size: 12px;
-  color: #909399;
+  color: var(--text-color-tertiary);
   font-family: 'Monaco', 'Menlo', 'Ubuntu Mono', monospace;
 }
 
@@ -3484,11 +4483,11 @@ onUnmounted(() => {
   display: flex;
   align-items: center;
   gap: 6px;
-  color: #606266;
+  color: var(--text-color-secondary);
   font-size: 14px;
   margin-bottom: 12px;
   padding: 8px;
-  background: #f8f9fa;
+  background: var(--bg-color-secondary);
   border-radius: 6px;
 }
 
@@ -3510,12 +4509,12 @@ onUnmounted(() => {
 .section-header h4 {
   margin: 0;
   font-size: 14px;
-  color: #303133;
+  color: var(--text-color);
   font-weight: 600;
 }
 
 .section-content {
-  background: #f8f9fa;
+  background: var(--bg-color-secondary);
   border-radius: 6px;
   overflow: hidden;
 }
@@ -3523,14 +4522,20 @@ onUnmounted(() => {
 .code-block {
   margin: 0;
   padding: 12px;
-  background: #2d3748;
-  color: #e2e8f0;
-  font-family: 'Monaco', 'Menlo', 'Ubuntu Mono', monospace;
+  background: var(--bg-color-tertiary) !important;
+  color: var(--text-color) !important;
+  font-family: 'Monaco', 'Menlo', 'Ubuntu Mono', monospace !important;
   font-size: 12px;
   line-height: 1.5;
   overflow-x: auto;
   white-space: pre-wrap;
   word-break: break-all;
+  border: 1px solid var(--border-color) !important;
+}
+
+.code-block .hljs {
+  background: transparent !important;
+  color: var(--text-color) !important;
 }
 
 .log-error {
@@ -3540,13 +4545,13 @@ onUnmounted(() => {
 .empty-logs {
   text-align: center;
   padding: 40px 20px;
-  color: #909399;
+  color: var(--text-color-tertiary);
 }
 
 .empty-logs p {
   margin-top: 16px;
   font-size: 14px;
-  color: #c0c4cc;
+  color: var(--text-color-tertiary);
 }
 
 /* 标签相关样式 */
@@ -3576,7 +4581,7 @@ onUnmounted(() => {
 
 .service-tag-manager h4 {
   margin: 0 0 16px 0;
-  color: #303133;
+  color: var(--text-color);
   font-size: 16px;
 }
 
@@ -3587,35 +4592,8 @@ onUnmounted(() => {
 .current-tags strong, .add-tags strong {
   display: block;
   margin-bottom: 8px;
-  color: #606266;
+  color: var(--text-color-secondary);
   font-size: 14px;
-}
-
-/* 自定义标签样式 */
-.el-tag {
-  border-radius: 4px;
-  font-weight: 500;
-  transition: all 0.2s ease;
-}
-
-.el-tag:hover {
-  opacity: 0.8;
-  transform: translateY(-1px);
-}
-
-/* 标签选择器选项样式 */
-.el-select-dropdown__item {
-  padding: 8px 12px;
-}
-
-/* 可点击标签的悬停效果 */
-.add-tags .el-tag {
-  transition: all 0.2s ease;
-}
-
-.add-tags .el-tag:hover {
-  transform: scale(1.05);
-  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.15);
 }
 
 /* 颜色预设选项样式 */
@@ -3638,7 +4616,7 @@ onUnmounted(() => {
 
 .color-preset-item:hover {
   transform: scale(1.1);
-  border-color: #ddd;
+  border-color: var(--border-color);
 }
 
 .color-preset-item.active {
@@ -3658,8 +4636,416 @@ onUnmounted(() => {
   text-shadow: 0 0 2px rgba(0, 0, 0, 0.5);
 }
 
-/* 响应式调整 */
+/* 请求详情对话框样式 - 重新设计 */
+.request-details-content {
+  max-height: 70vh;
+  overflow-y: auto;
+  background-color: var(--bg-color);
+  padding: 4px;
+}
+
+.details-section {
+  margin-bottom: 20px;
+  background: var(--card-bg);
+  border-radius: 8px;
+  padding: 16px;
+  border: 1px solid var(--border-color);
+  transition: all 0.2s ease;
+}
+
+.details-section:hover {
+  border-color: var(--border-color-light);
+  box-shadow: 0 2px 8px var(--shadow-color-light);
+}
+
+.details-section h3 {
+  margin: 0 0 12px 0;
+  color: var(--text-color);
+  font-size: 15px;
+  font-weight: 600;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.details-section h3::before {
+  content: '';
+  width: 3px;
+  height: 16px;
+  background: linear-gradient(135deg, #409eff, #66b1ff);
+  border-radius: 2px;
+}
+
+.details-section .section-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 12px;
+}
+
+.details-section .section-header h3 {
+  margin: 0;
+}
+
+.headers-container {
+  border-radius: 6px;
+  overflow: hidden;
+  background: var(--card-bg);
+  box-shadow: inset 0 1px 3px var(--shadow-color-light);
+}
+
+.code-container {
+  border-radius: 6px;
+  overflow: hidden;
+  background: var(--bg-color-secondary);
+  border: 1px solid var(--border-color);
+}
+
+.code-container .code-block {
+  margin: 0;
+  border-radius: 0;
+  background: var(--bg-color-secondary) !important;
+  color: var(--text-color) !important;
+  border: none !important;
+  padding: 16px;
+  font-size: 13px;
+  line-height: 1.6;
+}
+
+/* 请求详情对话框内的描述列表特殊处理 */
+.request-details-content .el-descriptions {
+  background-color: transparent !important;
+  border-radius: 6px;
+  overflow: hidden;
+}
+
+.request-details-content .el-descriptions__table {
+  background-color: transparent !important;
+}
+
+.request-details-content .el-descriptions-item__label {
+  background-color: var(--bg-color-secondary) !important;
+  color: var(--text-color-secondary) !important;
+  font-weight: 600 !important;
+  font-size: 13px !important;
+  padding: 12px 16px !important;
+}
+
+.request-details-content .el-descriptions-item__content {
+  background-color: var(--card-bg) !important;
+  color: var(--text-color) !important;
+  font-weight: 500 !important;
+  padding: 12px 16px !important;
+}
+
+.request-details-content .el-descriptions--bordered .el-descriptions-item__label,
+.request-details-content .el-descriptions--bordered .el-descriptions-item__content {
+  border-color: var(--border-color) !important;
+}
+
+/* 代码块内的标签样式 */
+.request-details-content code {
+  background: var(--bg-color-secondary);
+  color: var(--text-color);
+  padding: 2px 6px;
+  border-radius: 3px;
+  font-family: 'Monaco', 'Menlo', 'Ubuntu Mono', monospace;
+  font-size: 12px;
+  border: 1px solid var(--border-color);
+}
+
+/* 表格样式优化 */
+.request-details-content .el-table {
+  background: transparent !important;
+}
+
+.request-details-content .el-table th.el-table__cell {
+  background-color: var(--bg-color-secondary) !important;
+  color: var(--text-color-secondary) !important;
+  font-weight: 600 !important;
+  font-size: 13px !important;
+  border-color: var(--border-color) !important;
+}
+
+.request-details-content .el-table td.el-table__cell {
+  background-color: var(--card-bg) !important;
+  color: var(--text-color) !important;
+  border-color: var(--border-color) !important;
+  font-size: 13px !important;
+}
+
+.request-details-content .el-table tbody tr:hover > td {
+  background-color: var(--hover-bg) !important;
+}
+
+/* 系统日志详情对话框样式 - 与请求详情保持一致 */
+.system-log-details-content {
+  max-height: 70vh;
+  overflow-y: auto;
+  background-color: var(--bg-color);
+  padding: 4px;
+}
+
+.system-log-details-content .details-section {
+  margin-bottom: 20px;
+  background: var(--card-bg);
+  border-radius: 8px;
+  padding: 16px;
+  border: 1px solid var(--border-color);
+  transition: all 0.2s ease;
+}
+
+.system-log-details-content .details-section:hover {
+  border-color: var(--border-color-light);
+  box-shadow: 0 2px 8px var(--shadow-color-light);
+}
+
+.system-log-details-content .details-section h3 {
+  margin: 0 0 12px 0;
+  color: var(--text-color);
+  font-size: 15px;
+  font-weight: 600;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.system-log-details-content .details-section h3::before {
+  content: '';
+  width: 3px;
+  height: 16px;
+  background: linear-gradient(135deg, #409eff, #66b1ff);
+  border-radius: 2px;
+}
+
+.system-log-details-content .headers-container {
+  border-radius: 6px;
+  overflow: hidden;
+  background: var(--card-bg);
+  box-shadow: inset 0 1px 3px var(--shadow-color-light);
+}
+
+.system-log-details-content .code-container {
+  border-radius: 6px;
+  overflow: hidden;
+  background: var(--bg-color-secondary);
+  border: 1px solid var(--border-color);
+}
+
+.system-log-details-content .code-container .code-block {
+  margin: 0;
+  border-radius: 0;
+  background: var(--bg-color-secondary) !important;
+  color: var(--text-color) !important;
+  border: none !important;
+  padding: 16px;
+  font-size: 13px;
+  line-height: 1.6;
+}
+
+.system-log-details-content .el-descriptions {
+  background-color: transparent !important;
+  border-radius: 6px;
+  overflow: hidden;
+}
+
+.system-log-details-content .el-descriptions__table {
+  background-color: transparent !important;
+}
+
+.system-log-details-content .el-descriptions-item__label {
+  background-color: var(--bg-color-secondary) !important;
+  color: var(--text-color-secondary) !important;
+  font-weight: 600 !important;
+  font-size: 13px !important;
+  padding: 12px 16px !important;
+}
+
+.system-log-details-content .el-descriptions-item__content {
+  background-color: var(--card-bg) !important;
+  color: var(--text-color) !important;
+  font-weight: 500 !important;
+  padding: 12px 16px !important;
+}
+
+.system-log-details-content .el-descriptions--bordered .el-descriptions-item__label,
+.system-log-details-content .el-descriptions--bordered .el-descriptions-item__content {
+  border-color: var(--border-color) !important;
+}
+
+.system-log-details-content code {
+  background: var(--bg-color-secondary);
+  color: var(--text-color);
+  padding: 2px 6px;
+  border-radius: 3px;
+  font-family: 'Monaco', 'Menlo', 'Ubuntu Mono', monospace;
+  font-size: 12px;
+  border: 1px solid var(--border-color);
+}
+
+.system-log-details-content .el-table {
+  background: transparent !important;
+}
+
+.system-log-details-content .el-table th.el-table__cell {
+  background-color: var(--bg-color-secondary) !important;
+  color: var(--text-color-secondary) !important;
+  font-weight: 600 !important;
+  font-size: 13px !important;
+  border-color: var(--border-color) !important;
+}
+
+.system-log-details-content .el-table td.el-table__cell {
+  background-color: var(--card-bg) !important;
+  color: var(--text-color) !important;
+  border-color: var(--border-color) !important;
+  font-size: 13px !important;
+}
+
+.system-log-details-content .el-table tbody tr:hover > td {
+  background-color: var(--hover-bg) !important;
+}
+
+/* 暗色主题下的自定义样式优化 */
+html.dark .stat-item {
+  background: var(--bg-color-secondary);
+  border: 1px solid var(--border-color);
+  color: var(--text-color);
+}
+
+html.dark .stat-running {
+  background: rgba(82, 196, 26, 0.15) !important;
+  color: #52c41a !important;
+  border-color: rgba(82, 196, 26, 0.3) !important;
+}
+
+html.dark .stat-healthy {
+  background: rgba(82, 196, 26, 0.15) !important;
+  color: #52c41a !important;
+  border-color: rgba(82, 196, 26, 0.3) !important;
+}
+
+html.dark .stat-unhealthy {
+  background: rgba(255, 77, 79, 0.15) !important;
+  color: #ff4d4f !important;
+  border-color: rgba(255, 77, 79, 0.3) !important;
+}
+
+html.dark .stat-stopped {
+  background: rgba(140, 140, 140, 0.15) !important;
+  color: #8c8c8c !important;
+  border-color: rgba(140, 140, 140, 0.3) !important;
+}
+
+html.dark .service-item.selected {
+  border-color: #4a9eff !important;
+  box-shadow: 0 2px 12px rgba(74, 158, 255, 0.3) !important;
+  background: rgba(74, 158, 255, 0.08) !important;
+}
+
+html.dark .docker-command {
+  background: var(--bg-color-secondary) !important;
+  border-color: var(--border-color) !important;
+  color: var(--text-color) !important;
+}
+
+html.dark .port-stats-summary {
+  background: var(--bg-color-secondary) !important;
+  border: 1px solid var(--border-color) !important;
+}
+
+.loading-details {
+  padding: 20px;
+}
+
+.log-actions {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.log-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 8px;
+}
+
+.log-basic-info {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex: 1;
+}
+
+.log-path {
+  font-family: 'Monaco', 'Menlo', 'Ubuntu Mono', monospace;
+  font-size: 13px;
+  color: var(--text-color-secondary);
+  background: var(--bg-color-secondary);
+  padding: 2px 6px;
+  border-radius: 3px;
+}
+
+.log-duration {
+  color: var(--text-color-tertiary);
+  font-size: 12px;
+}
+
+.log-time {
+  color: var(--text-color-tertiary);
+  font-size: 12px;
+  white-space: nowrap;
+}
+
+/* JSON语法高亮 - 暗色主题适配 */
+html.dark .code-block .hljs-string {
+  color: #98d982 !important;
+}
+
+html.dark .code-block .hljs-number {
+  color: #d19a66 !important;
+}
+
+html.dark .code-block .hljs-literal {
+  color: #56b6c2 !important;
+}
+
+html.dark .code-block .hljs-attr {
+  color: #e06c75 !important;
+}
+
+html.dark .code-block .hljs-punctuation {
+  color: var(--text-color-secondary) !important;
+}
+
+/* 亮色主题JSON语法高亮 */
+html:not(.dark) .code-block .hljs-string {
+  color: #032f62 !important;
+}
+
+html:not(.dark) .code-block .hljs-number {
+  color: #005cc5 !important;
+}
+
+html:not(.dark) .code-block .hljs-literal {
+  color: #005cc5 !important;
+}
+
+html:not(.dark) .code-block .hljs-attr {
+  color: #6f42c1 !important;
+}
+
+html:not(.dark) .code-block .hljs-punctuation {
+  color: #24292e !important;
+}
+
+/* 响应式设计 */
 @media (max-width: 768px) {
+  .dashboard {
+    padding: 10px;
+  }
+  
   .log-controls {
     flex-direction: column;
     gap: 12px;
@@ -3696,5 +5082,159 @@ onUnmounted(() => {
     align-self: stretch;
     justify-content: flex-start;
   }
+  
+  .log-actions {
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 8px;
+  }
+  
+  .request-details-content {
+    max-height: 60vh;
+  }
+}
+
+/* 系统日志详情对话框样式 */
+.system-log-details-content {
+  max-height: 70vh;
+  overflow-y: auto;
+  background-color: var(--card-bg);
+}
+
+.message-container {
+  border: 1px solid var(--border-color);
+  border-radius: 6px;
+  overflow: hidden;
+  background: var(--bg-color-secondary);
+}
+
+.message-block {
+  margin: 0;
+  padding: 12px;
+  background: var(--bg-color-secondary);
+  color: var(--text-color);
+  font-family: 'Monaco', 'Menlo', 'Ubuntu Mono', monospace;
+  font-size: 13px;
+  line-height: 1.5;
+  overflow-x: auto;
+  white-space: pre-wrap;
+  word-break: break-all;
+}
+
+/* 系统日志详情对话框内的描述列表 */
+.system-log-details-content .el-descriptions {
+  background-color: var(--card-bg) !important;
+}
+
+.system-log-details-content .el-descriptions__table {
+  background-color: var(--card-bg) !important;
+}
+
+.system-log-details-content .el-descriptions-item__label {
+  background-color: var(--bg-color-tertiary) !important;
+  color: var(--text-color) !important;
+  font-weight: 700 !important;
+}
+
+.system-log-details-content .el-descriptions-item__content {
+  background-color: var(--bg-color-secondary) !important;
+  color: var(--text-color) !important;
+  font-weight: 500 !important;
+}
+
+.system-log-details-content .el-descriptions--bordered .el-descriptions-item__label,
+.system-log-details-content .el-descriptions--bordered .el-descriptions-item__content {
+  border-color: var(--border-color) !important;
+}
+
+.args-container {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+.arg-item {
+  border: 1px solid var(--border-color);
+  border-radius: 6px;
+  overflow: hidden;
+}
+
+.arg-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 8px 12px;
+  background: var(--bg-color-secondary);
+  border-bottom: 1px solid var(--border-color);
+  font-size: 14px;
+  color: var(--text-color);
+}
+
+.arg-content {
+  background: var(--card-bg);
+}
+
+.arg-block {
+  margin: 0;
+  padding: 12px;
+  background: var(--bg-color-tertiary);
+  color: var(--text-color);
+  font-family: 'Monaco', 'Menlo', 'Ubuntu Mono', monospace;
+  font-size: 12px;
+  line-height: 1.5;
+  overflow-x: auto;
+  white-space: pre-wrap;
+  word-break: break-all;
+}
+
+/* 系统日志条目样式调整 */
+.log-entry {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: 12px;
+  padding: 4px 8px;
+  border-radius: 3px;
+  background: var(--card-bg);
+  border-left: 3px solid var(--border-color);
+  transition: all 0.2s;
+}
+
+.log-content {
+  flex: 1;
+  min-width: 0;
+}
+
+.log-actions {
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  opacity: 1;
+}
+
+/* 动画效果 */
+.fade-enter-active,
+.fade-leave-active {
+  transition: opacity 0.3s ease;
+}
+
+.fade-enter-from,
+.fade-leave-to {
+  opacity: 0;
+}
+
+.slide-enter-active,
+.slide-leave-active {
+  transition: all 0.3s ease;
+}
+
+.slide-enter-from {
+  transform: translateY(-10px);
+  opacity: 0;
+}
+
+.slide-leave-to {
+  transform: translateY(10px);
+  opacity: 0;
 }
 </style> 

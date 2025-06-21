@@ -9,13 +9,13 @@ class ProcessManager {
   // 添加要跟踪的端口
   trackPort(port) {
     this.trackedPorts.add(port);
-    console.log(`开始跟踪端口: ${port}`);
+    // 静默跟踪端口，不记录日志
   }
 
   // 停止跟踪端口
   untrackPort(port) {
     this.trackedPorts.delete(port);
-    console.log(`停止跟踪端口: ${port}`);
+    // 静默停止跟踪，不记录日志
   }
 
   // 获取占用指定端口的进程ID
@@ -87,7 +87,9 @@ class ProcessManager {
 
   // 清理所有跟踪的端口
   async cleanupAllTrackedPorts() {
-    console.log(`开始清理 ${this.trackedPorts.size} 个跟踪的端口...`);
+    if (this.trackedPorts.size > 0) {
+      console.log(`清理 ${this.trackedPorts.size} 个跟踪的端口`);
+    }
     const cleanupPromises = Array.from(this.trackedPorts).map(port => 
       this.killProcessByPort(port)
     );
@@ -95,7 +97,9 @@ class ProcessManager {
     const results = await Promise.allSettled(cleanupPromises);
     const successful = results.filter(r => r.status === 'fulfilled' && r.value).length;
     
-    console.log(`端口清理完成: ${successful}/${this.trackedPorts.size} 个端口已清理`);
+    if (successful > 0) {
+      console.log(`端口清理完成: ${successful}/${this.trackedPorts.size} 个端口已清理`);
+    }
     this.trackedPorts.clear();
     
     return successful;

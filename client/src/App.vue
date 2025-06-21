@@ -1,38 +1,99 @@
 <template>
   <div id="app">
-    <el-container>
-      <el-header>
-        <div class="header-content">
+    <el-container class="app-container">
+      <!-- 左侧导航栏 -->
+      <el-aside width="240px" class="sidebar">
+        <div class="sidebar-header">
           <div class="app-brand">
             <img src="/logo.png" alt="Switch Service" class="brand-logo" />
             <h1>Switch Service</h1>
           </div>
-          <div class="header-actions">
-            <el-tooltip :content="appStore.theme === 'light' ? '切换到暗色模式' : '切换到亮色模式'" placement="bottom">
-              <el-button 
-                type="text" 
-                :icon="appStore.theme === 'light' ? 'Moon' : 'Sunny'"
-                @click="appStore.toggleTheme()"
-                class="theme-toggle"
-              />
-            </el-tooltip>
-          </div>
         </div>
-      </el-header>
-      <el-main>
-        <router-view />
-      </el-main>
+        
+        <el-menu
+          :default-active="activeMenu"
+          class="sidebar-menu"
+          @select="handleMenuSelect"
+        >
+          <el-menu-item index="service-management">
+            <el-icon><Setting /></el-icon>
+            <span>服务管理</span>
+          </el-menu-item>
+        </el-menu>
+      </el-aside>
+
+      <!-- 右侧主内容区 -->
+      <el-container class="main-container">
+        <!-- 顶部栏 -->
+        <el-header height="60px" class="header">
+          <div class="header-content">
+            <div class="header-title">
+              <h2>{{ currentPageTitle }}</h2>
+            </div>
+            <div class="header-actions">
+              <el-tooltip :content="appStore.theme === 'light' ? '切换到暗色模式' : '切换到亮色模式'" placement="bottom">
+                <el-button 
+                  type="text" 
+                  :icon="appStore.theme === 'light' ? 'Moon' : 'Sunny'"
+                  @click="appStore.toggleTheme()"
+                  class="theme-toggle"
+                />
+              </el-tooltip>
+            </div>
+          </div>
+        </el-header>
+
+        <!-- 主内容区 -->
+        <el-main class="content">
+          <router-view />
+        </el-main>
+      </el-container>
     </el-container>
   </div>
 </template>
 
 <script setup>
-import { onMounted } from 'vue'
+import { ref, computed, onMounted } from 'vue'
+import { useRoute, useRouter } from 'vue-router'
 import { useAppStore } from './stores/app'
+import { Setting, Moon, Sunny } from '@element-plus/icons-vue'
 
 const appStore = useAppStore()
+const route = useRoute()
+const router = useRouter()
+
+// 当前激活的菜单项
+const activeMenu = ref('service-management')
+
+// 页面标题映射
+const pageTitleMap = {
+  'service-management': '服务管理'
+}
+
+// 当前页面标题
+const currentPageTitle = computed(() => {
+  return pageTitleMap[activeMenu.value] || '服务管理'
+})
+
+// 处理菜单选择
+const handleMenuSelect = (index) => {
+  activeMenu.value = index
+  
+  switch (index) {
+    case 'service-management':
+      router.push('/')
+      break
+    default:
+      router.push('/')
+  }
+}
 
 onMounted(async () => {
+  // 根据当前路由设置激活菜单
+  if (route.path === '/') {
+    activeMenu.value = 'service-management'
+  }
+  
   // 初始加载数据
   await Promise.all([
     appStore.fetchConfig(),
@@ -936,6 +997,37 @@ html.dark .el-dialog .el-descriptions__cell {
   border-color: var(--border-color) !important;
 }
 
+/* 菜单组件暗色主题 */
+html.dark .el-menu {
+  background-color: transparent !important;
+  border: none !important;
+}
+
+html.dark .el-menu-item {
+  color: var(--text-color-secondary) !important;
+  background-color: transparent !important;
+}
+
+html.dark .el-menu-item:hover {
+  background-color: var(--hover-bg) !important;
+  color: var(--text-color) !important;
+}
+
+html.dark .el-menu-item.is-active {
+  background-color: var(--active-bg) !important;
+  color: #409eff !important;
+}
+
+html.dark .el-menu-item .el-icon {
+  color: inherit !important;
+}
+
+/* 侧边栏容器暗色主题 */
+html.dark .el-aside {
+  background-color: var(--card-bg) !important;
+  border-right-color: var(--border-color) !important;
+}
+
 /* 滚动条样式 - 更柔和的设计 */
 html.dark ::-webkit-scrollbar {
   width: 8px;
@@ -963,12 +1055,21 @@ html.dark ::-webkit-scrollbar-corner {
 </style>
 
 <style scoped>
-.header-content {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  height: 100%;
-  padding: 0 20px;
+/* 应用容器 */
+.app-container {
+  height: 100vh;
+}
+
+/* 左侧导航栏 */
+.sidebar {
+  background-color: var(--card-bg);
+  border-right: 1px solid var(--border-color);
+  box-shadow: 2px 0 8px var(--shadow-color-light);
+}
+
+.sidebar-header {
+  padding: 20px;
+  border-bottom: 1px solid var(--border-color);
 }
 
 .app-brand {
@@ -989,10 +1090,57 @@ html.dark ::-webkit-scrollbar-corner {
   transform: scale(1.05);
 }
 
-h1 {
+.app-brand h1 {
   margin: 0;
   color: #409eff;
-  font-size: 24px;
+  font-size: 20px;
+  font-weight: 600;
+}
+
+.sidebar-menu {
+  border: none;
+  background-color: transparent;
+}
+
+.sidebar-menu .el-menu-item {
+  margin: 8px 16px;
+  border-radius: 8px;
+  transition: all 0.3s ease;
+}
+
+.sidebar-menu .el-menu-item:hover {
+  background-color: var(--hover-bg);
+}
+
+.sidebar-menu .el-menu-item.is-active {
+  background-color: var(--active-bg);
+  color: #409eff;
+}
+
+/* 主内容区容器 */
+.main-container {
+  background-color: var(--bg-color);
+}
+
+/* 顶部栏 */
+.header {
+  background-color: var(--header-bg);
+  border-bottom: 1px solid var(--border-color);
+  padding: 0;
+}
+
+.header-content {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  height: 100%;
+  padding: 0 24px;
+}
+
+.header-title h2 {
+  margin: 0;
+  color: var(--text-color);
+  font-size: 18px;
   font-weight: 600;
 }
 
@@ -1007,10 +1155,18 @@ h1 {
   padding: 8px;
   border-radius: 50%;
   transition: all 0.3s ease;
+  color: var(--text-color-secondary);
 }
 
 .theme-toggle:hover {
-  background-color: var(--bg-color-secondary);
+  background-color: var(--hover-bg);
   transform: scale(1.1);
+  color: var(--text-color);
+}
+
+/* 主内容区 */
+.content {
+  background-color: var(--bg-color);
+  padding: 24px;
 }
 </style> 

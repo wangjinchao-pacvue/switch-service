@@ -12,8 +12,8 @@ services:
       - NODE_ENV=production
       - PORT_RANGE_START=4000
       - PORT_RANGE_END=4100
-    volumes:
-      - ./data:/app/server/data  # 持久化数据目录
+    # volumes:
+    #   - ./data:/app/server/data  # 可选：数据持久化（可能遇到权限问题）
 
   # 可选：如果你想在同一个Docker网络中运行Eureka用于测试
   eureka-server:

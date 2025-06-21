@@ -25,20 +25,13 @@ fi
 echo "⬇️  拉取最新镜像: ${IMAGE_NAME}"
 docker pull ${IMAGE_NAME}
 
-# 创建数据目录并设置权限
-echo "📁 创建数据目录..."
-mkdir -p ./data
-chmod 755 ./data
-echo "📁 数据目录权限设置完成"
-
-# 运行新容器
+# 运行新容器（数据存储在容器内部）
 echo "🔄 启动新容器: ${CONTAINER_NAME}"
 docker run -d \
   --name ${CONTAINER_NAME} \
   --restart unless-stopped \
   -p ${HOST_PORT}:3400 \
   -p ${PROXY_PORT_START}-${PROXY_PORT_END}:${PROXY_PORT_START}-${PROXY_PORT_END} \
-  -v $(pwd)/data:/app/server/data \
   -e PORT_RANGE_START=${PROXY_PORT_START} \
   -e PORT_RANGE_END=${PROXY_PORT_END} \
   ${IMAGE_NAME}

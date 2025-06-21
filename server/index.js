@@ -3224,9 +3224,9 @@ app.post('/api/config/port-range', async (req, res) => {
 });
 
 // 接口调试相关API
-app.get('/api/debug/apis', (req, res) => {
+app.get('/api/debug/apis', async (req, res) => {
   try {
-    const apis = database.getDebugApis()
+    const apis = await database.getDebugApis()
     res.json({ success: true, data: apis })
   } catch (error) {
     console.error('获取调试接口失败:', error)
@@ -3234,10 +3234,10 @@ app.get('/api/debug/apis', (req, res) => {
   }
 })
 
-app.post('/api/debug/apis', (req, res) => {
+app.post('/api/debug/apis', async (req, res) => {
   try {
     const { serviceName, apis } = req.body
-    database.saveDebugApis(serviceName, apis)
+    await database.saveDebugApis(serviceName, apis)
     res.json({ success: true })
   } catch (error) {
     console.error('保存调试接口失败:', error)
@@ -3245,10 +3245,10 @@ app.post('/api/debug/apis', (req, res) => {
   }
 })
 
-app.delete('/api/debug/apis/:serviceName/:apiId', (req, res) => {
+app.delete('/api/debug/apis/:serviceName/:apiId', async (req, res) => {
   try {
     const { serviceName, apiId } = req.params
-    database.deleteDebugApi(serviceName, parseInt(apiId))
+    await database.deleteDebugApi(serviceName, parseInt(apiId))
     res.json({ success: true })
   } catch (error) {
     console.error('删除调试接口失败:', error)

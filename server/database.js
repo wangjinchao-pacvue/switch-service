@@ -992,65 +992,103 @@ class Database {
   }
 
   // 调试接口相关方法
-  getDebugApis() {
-    const stmt = this.db.prepare('SELECT * FROM debug_apis ORDER BY service_name, id');
-    const rows = stmt.all();
-    
-    const result = {};
-    rows.forEach(row => {
-      if (!result[row.service_name]) {
-        result[row.service_name] = [];
-      }
-      result[row.service_name] = JSON.parse(row.api_data);
+  async getDebugApis() {
+    return new Promise((resolve, reject) => {
+      this.db.all('SELECT * FROM debug_apis ORDER BY service_name, id', (err, rows) => {
+        if (err) {
+          reject(err);
+          return;
+        }
+        
+        const result = {};
+        if (rows && rows.length > 0) {
+          rows.forEach(row => {
+            if (!result[row.service_name]) {
+              result[row.service_name] = [];
+            }
+            result[row.service_name] = JSON.parse(row.api_data);
+          });
+        }
+        
+        resolve(result);
+      });
     });
-    
-    return result;
   }
 
-  saveDebugApis(serviceName, apis) {
-    const deleteStmt = this.db.prepare('DELETE FROM debug_apis WHERE service_name = ?');
-    const insertStmt = this.db.prepare(`
-      INSERT INTO debug_apis (service_name, api_data, updated_at) 
-      VALUES (?, ?, CURRENT_TIMESTAMP)
-    `);
-    
-    // 使用事务确保数据一致性
-    const transaction = this.db.transaction(() => {
-      deleteStmt.run(serviceName);
-      if (apis && apis.length > 0) {
-        insertStmt.run(serviceName, JSON.stringify(apis));
-      }
+  async saveDebugApis(serviceName, apis) {
+    return new Promise((resolve, reject) => {
+      // 先删除现有记录
+      this.db.run('DELETE FROM debug_apis WHERE service_name = ?', [serviceName], (err) => {
+        if (err) {
+          reject(err);
+          return;
+        }
+        
+        // 如果有接口数据，则插入新记录
+        if (apis && apis.length > 0) {
+          this.db.run(`
+            INSERT INTO debug_apis (service_name, api_data, updated_at) 
+            VALUES (?, ?, CURRENT_TIMESTAMP)
+          `, [serviceName, JSON.stringify(apis)], (insertErr) => {
+            if (insertErr) {
+              reject(insertErr);
+            } else {
+              console.log(`保存服务 ${serviceName} 的调试接口配置，共 ${apis.length} 个接口`);
+              resolve();
+            }
+          });
+        } else {
+          console.log(`清空服务 ${serviceName} 的调试接口配置`);
+          resolve();
+        }
+      });
     });
-    
-    transaction();
-    console.log(`保存服务 ${serviceName} 的调试接口配置，共 ${apis?.length || 0} 个接口`);
   }
 
-  deleteDebugApi(serviceName, apiId) {
-    // 先获取当前数据
-    const selectStmt = this.db.prepare('SELECT api_data FROM debug_apis WHERE service_name = ?');
-    const row = selectStmt.get(serviceName);
-    
-    if (row) {
-      const apis = JSON.parse(row.api_data);
-      const filteredApis = apis.filter(api => api.id !== apiId);
-      
-      if (filteredApis.length === 0) {
-        // 如果没有接口了，删除整个记录
-        const deleteStmt = this.db.prepare('DELETE FROM debug_apis WHERE service_name = ?');
-        deleteStmt.run(serviceName);
-      } else {
-        // 更新数据
-        const updateStmt = this.db.prepare(`
-          UPDATE debug_apis 
-          SET api_data = ?, updated_at = CURRENT_TIMESTAMP 
-          WHERE service_name = ?
-        `);
-        updateStmt.run(JSON.stringify(filteredApis), serviceName);
-      }
-      
-      console.log(`删除服务 ${serviceName} 的调试接口 (ID: ${apiId})`);
-    }
+  async deleteDebugApi(serviceName, apiId) {
+    return new Promise((resolve, reject) => {
+      // 先获取当前数据
+      this.db.get('SELECT api_data FROM debug_apis WHERE service_name = ?', [serviceName], (err, row) => {
+        if (err) {
+          reject(err);
+          return;
+        }
+        
+        if (row) {
+          const apis = JSON.parse(row.api_data);
+          const filteredApis = apis.filter(api => api.id !== apiId);
+          
+          if (filteredApis.length === 0) {
+            // 如果没有接口了，删除整个记录
+            this.db.run('DELETE FROM debug_apis WHERE service_name = ?', [serviceName], (deleteErr) => {
+              if (deleteErr) {
+                reject(deleteErr);
+              } else {
+                console.log(`删除服务 ${serviceName} 的调试接口 (ID: ${apiId})，记录已清空`);
+                resolve();
+              }
+            });
+          } else {
+            // 更新数据
+            this.db.run(`
+              UPDATE debug_apis 
+              SET api_data = ?, updated_at = CURRENT_TIMESTAMP 
+              WHERE service_name = ?
+            `, [JSON.stringify(filteredApis), serviceName], (updateErr) => {
+              if (updateErr) {
+                reject(updateErr);
+              } else {
+                console.log(`删除服务 ${serviceName} 的调试接口 (ID: ${apiId})`);
+                resolve();
+              }
+            });
+          }
+        } else {
+          console.log(`服务 ${serviceName} 没有找到调试接口记录`);
+          resolve();
+        }
+      });
+    });
   }
 
   close() {

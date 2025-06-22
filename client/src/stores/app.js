@@ -24,6 +24,10 @@ export const useAppStore = defineStore('app', {
     theme: 'light' // 主题模式：light | dark
   }),
 
+  getters: {
+    isDark: (state) => state.theme === 'dark'
+  },
+
   actions: {
     async fetchConfig() {
       try {
@@ -94,53 +98,47 @@ export const useAppStore = defineStore('app', {
       }
     },
 
-    async startProxyService(id) {
+    async startProxyService(id, useGlobalLoading = true) {
       try {
-        this.loading = true
+        if (useGlobalLoading) this.loading = true
         const response = await axios.post(`/api/proxy/${id}/start`)
-        if (response.data.success) {
-          await this.fetchProxyServices()
-        }
+        // 移除重复调用，依赖WebSocket更新数据
         return response.data
       } catch (error) {
         console.error('Failed to start proxy service:', error)
         throw error
       } finally {
-        this.loading = false
+        if (useGlobalLoading) this.loading = false
       }
     },
 
-    async stopProxyService(id) {
+    async stopProxyService(id, useGlobalLoading = true) {
       try {
-        this.loading = true
+        if (useGlobalLoading) this.loading = true
         const response = await axios.post(`/api/proxy/${id}/stop`)
-        if (response.data.success) {
-          await this.fetchProxyServices()
-        }
+        // 移除重复调用，依赖WebSocket更新数据
         return response.data
       } catch (error) {
         console.error('Failed to stop proxy service:', error)
         throw error
       } finally {
-        this.loading = false
+        if (useGlobalLoading) this.loading = false
       }
     },
 
-    async switchProxyTarget(id, activeTarget) {
+    async switchProxyTarget(id, activeTarget, useGlobalLoading = false) {
       try {
-        this.loading = true
+        if (useGlobalLoading) this.loading = true
         const response = await axios.post(`/api/proxy/${id}/switch`, {
           activeTarget
         })
-        if (response.data.success) {
-          await this.fetchProxyServices()
-        }
+        // 移除重复调用，依赖WebSocket更新数据
         return response.data
       } catch (error) {
         console.error('Failed to switch proxy target:', error)
         throw error
       } finally {
-        this.loading = false
+        if (useGlobalLoading) this.loading = false
       }
     },
 
@@ -148,9 +146,7 @@ export const useAppStore = defineStore('app', {
       try {
         this.loading = true
         const response = await axios.put(`/api/proxy/${id}`, updates)
-        if (response.data.success) {
-          await this.fetchProxyServices()
-        }
+        // 移除重复调用，依赖WebSocket更新数据
         return response.data
       } catch (error) {
         console.error('Failed to update proxy service:', error)
@@ -209,10 +205,8 @@ export const useAppStore = defineStore('app', {
     async batchStartProxyServices(ids) {
       try {
         this.loading = true
-        const response = await axios.post('/api/proxy/batch/start', { ids })
-        if (response.data.success) {
-          await this.fetchProxyServices()
-        }
+        const response = await axios.post('/api/proxy/batchStart', { ids })
+        // 移除重复调用，依赖WebSocket更新数据
         return response.data
       } catch (error) {
         console.error('Failed to batch start proxy services:', error)
@@ -225,16 +219,80 @@ export const useAppStore = defineStore('app', {
     async batchStopProxyServices(ids) {
       try {
         this.loading = true
-        const response = await axios.post('/api/proxy/batch/stop', { ids })
-        if (response.data.success) {
-          await this.fetchProxyServices()
-        }
+        const response = await axios.post('/api/proxy/batchStop', { ids })
+        // 移除重复调用，依赖WebSocket更新数据
         return response.data
       } catch (error) {
         console.error('Failed to batch stop proxy services:', error)
         throw error
       } finally {
         this.loading = false
+      }
+    },
+
+    async batchAddTagsToServices(serviceIds, tagIds) {
+      try {
+        this.loading = true
+        const response = await axios.post('/api/proxy/batchTags', { 
+          serviceIds, 
+          tagIds 
+        })
+        // 依赖WebSocket更新数据，不需要手动调用fetchProxyServices
+        return response.data
+      } catch (error) {
+        console.error('Failed to batch add tags to services:', error)
+        throw error
+      } finally {
+        this.loading = false
+      }
+    },
+
+    // 增量更新单个服务
+    updateSingleProxyService(updatedService) {
+      const index = this.proxyServices.findIndex(s => s.id === updatedService.id)
+      if (index !== -1) {
+        this.proxyServices[index] = updatedService
+      } else {
+        // 如果服务不存在，添加到列表
+        this.proxyServices.push(updatedService)
+      }
+      // 更新统计信息
+      this.updateStatsFromServices()
+    },
+
+    // 增量更新多个服务
+    updateMultipleProxyServices(updatedServices) {
+      updatedServices.forEach(updatedService => {
+        const index = this.proxyServices.findIndex(s => s.id === updatedService.id)
+        if (index !== -1) {
+          this.proxyServices[index] = updatedService
+        } else {
+          this.proxyServices.push(updatedService)
+        }
+      })
+      // 更新统计信息
+      this.updateStatsFromServices()
+    },
+
+    // 删除服务
+    removeProxyService(serviceId) {
+      const index = this.proxyServices.findIndex(s => s.id === serviceId)
+      if (index !== -1) {
+        this.proxyServices.splice(index, 1)
+        // 更新统计信息
+        this.updateStatsFromServices()
+      }
+    },
+
+    // 根据当前服务列表更新统计信息
+    updateStatsFromServices() {
+      const services = this.proxyServices || []
+      this.proxyStats = {
+        total: services.length,
+        running: services.filter(s => s.isRunning).length,
+        stopped: services.filter(s => !s.isRunning).length,
+        healthy: services.filter(s => s.isRunning && s.status === 'healthy').length,
+        unhealthy: services.filter(s => s.isRunning && s.status === 'unhealthy').length
       }
     },
 

@@ -133,6 +133,18 @@ class Database {
         )
       `;
 
+      const createServiceTagsTable = `
+        CREATE TABLE IF NOT EXISTS service_tags (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          service_id TEXT NOT NULL,
+          tag_id TEXT NOT NULL,
+          created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+          FOREIGN KEY (service_id) REFERENCES proxy_services(id) ON DELETE CASCADE,
+          FOREIGN KEY (tag_id) REFERENCES tags(id) ON DELETE CASCADE,
+          UNIQUE(service_id, tag_id)
+        )
+      `;
+
       // 首先创建 proxy_services 表
       this.db.run(createProxyServicesTable, (err) => {
         if (err) {
@@ -155,6 +167,14 @@ class Database {
               reject(tagErr);
               return;
             }
+
+            // 检查并添加 type 列到 tags 表（如果不存在）
+            this.db.run('ALTER TABLE tags ADD COLUMN type TEXT DEFAULT \'default\'', (alterTagErr) => {
+              // 忽略列已存在的错误
+              if (alterTagErr && !alterTagErr.message.includes('duplicate column name')) {
+                console.error('添加tags表type列失败:', alterTagErr);
+              }
+            });
 
             // 创建 system_config 表
             this.db.run(createSystemConfigTable, (configErr) => {
@@ -184,8 +204,16 @@ class Database {
                           console.error('创建debug_apis表失败:', debugErr);
                           reject(debugErr);
                         } else {
-                          console.log('数据库表初始化完成');
-                          resolve();
+                          // 创建service_tags表
+                          this.db.run(createServiceTagsTable, (serviceTagsErr) => {
+                            if (serviceTagsErr) {
+                              console.error('创建service_tags表失败:', serviceTagsErr);
+                              reject(serviceTagsErr);
+                            } else {
+                              console.log('数据库表初始化完成');
+                              resolve();
+                            }
+                          });
                         }
                       });
                     }
@@ -201,7 +229,18 @@ class Database {
   // 获取所有代理服务
   async getAllProxyServices() {
     return new Promise((resolve, reject) => {
-      this.db.all('SELECT * FROM proxy_services ORDER BY created_at DESC', (err, rows) => {
+      // 使用JOIN查询来获取服务及其标签
+      const sql = `
+        SELECT 
+          ps.*,
+          GROUP_CONCAT(st.tag_id) as tag_ids
+        FROM proxy_services ps
+        LEFT JOIN service_tags st ON ps.id = st.service_id
+        GROUP BY ps.id
+        ORDER BY ps.created_at DESC
+      `;
+      
+      this.db.all(sql, (err, rows) => {
         if (err) {
           reject(err);
         } else {
@@ -212,7 +251,7 @@ class Database {
             targets: JSON.parse(row.targets),
             activeTarget: row.active_target,
             isRunning: Boolean(row.is_running),
-            tags: JSON.parse(row.tags || '[]'),
+            tags: row.tag_ids ? row.tag_ids.split(',').filter(Boolean) : [],
             createdAt: row.created_at,
             updatedAt: row.updated_at
           }));
@@ -228,64 +267,151 @@ class Database {
     const { serviceName, port, targets, activeTarget, tags = [] } = serviceConfig;
     
     return new Promise((resolve, reject) => {
-      const sql = `
-        INSERT INTO proxy_services (id, service_name, port, targets, active_target, is_running, tags)
-        VALUES (?, ?, ?, ?, ?, 0, ?)
-      `;
-      
-      this.db.run(sql, [id, serviceName, port, JSON.stringify(targets), activeTarget, JSON.stringify(tags)], function(err) {
-        if (err) {
-          reject(err);
-        } else {
-          resolve({ id, ...serviceConfig, isRunning: false, tags });
-        }
+      // 开始事务
+      this.db.serialize(() => {
+        this.db.run('BEGIN TRANSACTION');
+        
+        // 插入服务（不再需要tags字段）
+        const serviceSql = `
+          INSERT INTO proxy_services (id, service_name, port, targets, active_target, is_running)
+          VALUES (?, ?, ?, ?, ?, 0)
+        `;
+        
+        this.db.run(serviceSql, [id, serviceName, port, JSON.stringify(targets), activeTarget], (err) => {
+          if (err) {
+            this.db.run('ROLLBACK');
+            reject(err);
+            return;
+          }
+          
+          // 如果有标签，插入标签关系
+          if (tags.length > 0) {
+            const tagSql = 'INSERT INTO service_tags (service_id, tag_id) VALUES (?, ?)';
+            let completed = 0;
+            let hasError = false;
+            
+            tags.forEach(tagId => {
+              this.db.run(tagSql, [id, tagId], (tagErr) => {
+                if (tagErr && !hasError) {
+                  hasError = true;
+                  this.db.run('ROLLBACK');
+                  reject(tagErr);
+                  return;
+                }
+                
+                completed++;
+                if (completed === tags.length) {
+                  this.db.run('COMMIT');
+                  resolve({ id, ...serviceConfig, isRunning: false, tags });
+                }
+              });
+            });
+          } else {
+            this.db.run('COMMIT');
+            resolve({ id, ...serviceConfig, isRunning: false, tags: [] });
+          }
+        });
       });
     });
   }
 
   // 更新代理服务
   async updateProxyService(id, updates) {
-    const fields = [];
-    const values = [];
-    
-    if (updates.targets !== undefined) {
-      fields.push('targets = ?');
-      values.push(JSON.stringify(updates.targets));
-    }
-    
-    if (updates.activeTarget !== undefined) {
-      fields.push('active_target = ?');
-      values.push(updates.activeTarget);
-    }
-    
-    if (updates.isRunning !== undefined) {
-      fields.push('is_running = ?');
-      values.push(updates.isRunning ? 1 : 0);
-    }
-    
-    if (updates.port !== undefined) {
-      fields.push('port = ?');
-      values.push(updates.port);
-    }
-
-    if (updates.tags !== undefined) {
-      fields.push('tags = ?');
-      values.push(JSON.stringify(updates.tags));
-    }
-
-    fields.push('updated_at = CURRENT_TIMESTAMP');
-    values.push(id);
-
     return new Promise((resolve, reject) => {
-      const sql = `UPDATE proxy_services SET ${fields.join(', ')} WHERE id = ?`;
-      
-      this.db.run(sql, values, function(err) {
-        if (err) {
-          reject(err);
+      this.db.serialize(() => {
+        this.db.run('BEGIN TRANSACTION');
+        
+        // 处理非标签字段的更新
+        const fields = [];
+        const values = [];
+        
+        if (updates.targets !== undefined) {
+          fields.push('targets = ?');
+          values.push(JSON.stringify(updates.targets));
+        }
+        
+        if (updates.activeTarget !== undefined) {
+          fields.push('active_target = ?');
+          values.push(updates.activeTarget);
+        }
+        
+        if (updates.isRunning !== undefined) {
+          fields.push('is_running = ?');
+          values.push(updates.isRunning ? 1 : 0);
+        }
+        
+        if (updates.port !== undefined) {
+          fields.push('port = ?');
+          values.push(updates.port);
+        }
+
+        fields.push('updated_at = CURRENT_TIMESTAMP');
+        values.push(id);
+
+        // 更新服务基本信息
+        if (fields.length > 1) { // 除了updated_at还有其他字段需要更新
+          const sql = `UPDATE proxy_services SET ${fields.join(', ')} WHERE id = ?`;
+          this.db.run(sql, values, (err) => {
+            if (err) {
+              this.db.run('ROLLBACK');
+              reject(err);
+              return;
+            }
+            
+            this.updateServiceTags(id, updates.tags, resolve, reject);
+          });
         } else {
-          resolve({ changes: this.changes });
+          // 只更新标签
+          this.updateServiceTags(id, updates.tags, resolve, reject);
         }
       });
+    });
+  }
+
+  // 更新服务标签的内部方法
+  updateServiceTags(serviceId, tags, resolve, reject) {
+    if (tags === undefined) {
+      // 没有标签更新，直接提交事务
+      this.db.run('COMMIT');
+      resolve({ changes: 1 });
+      return;
+    }
+
+    // 删除现有的标签关系
+    this.db.run('DELETE FROM service_tags WHERE service_id = ?', [serviceId], (deleteErr) => {
+      if (deleteErr) {
+        this.db.run('ROLLBACK');
+        reject(deleteErr);
+        return;
+      }
+
+      // 如果有新标签，插入新的关系
+      if (tags.length > 0) {
+        const tagSql = 'INSERT INTO service_tags (service_id, tag_id) VALUES (?, ?)';
+        let completed = 0;
+        let hasError = false;
+
+        tags.forEach(tagId => {
+          this.db.run(tagSql, [serviceId, tagId], (tagErr) => {
+            if (tagErr && !hasError) {
+              hasError = true;
+              this.db.run('ROLLBACK');
+              reject(tagErr);
+              return;
+            }
+
+            completed++;
+            if (completed === tags.length) {
+              this.db.run('COMMIT');
+              resolve({ changes: 1 });
+            }
+          });
+        });
+      } else {
+        // 没有新标签，直接提交事务
+        this.db.run('COMMIT');
+        resolve({ changes: 1 });
+      }
     });
   }
 
@@ -305,7 +431,17 @@ class Database {
   // 根据ID获取代理服务
   async getProxyServiceById(id) {
     return new Promise((resolve, reject) => {
-      this.db.get('SELECT * FROM proxy_services WHERE id = ?', [id], (err, row) => {
+      const sql = `
+        SELECT 
+          ps.*,
+          GROUP_CONCAT(st.tag_id) as tag_ids
+        FROM proxy_services ps
+        LEFT JOIN service_tags st ON ps.id = st.service_id
+        WHERE ps.id = ?
+        GROUP BY ps.id
+      `;
+      
+      this.db.get(sql, [id], (err, row) => {
         if (err) {
           reject(err);
         } else if (!row) {
@@ -318,7 +454,7 @@ class Database {
             targets: JSON.parse(row.targets),
             activeTarget: row.active_target,
             isRunning: Boolean(row.is_running),
-            tags: JSON.parse(row.tags || '[]'),
+            tags: row.tag_ids ? row.tag_ids.split(',').filter(Boolean) : [],
             createdAt: row.created_at,
             updatedAt: row.updated_at
           });
@@ -330,7 +466,17 @@ class Database {
   // 根据服务名获取代理服务
   async getProxyServiceByName(serviceName) {
     return new Promise((resolve, reject) => {
-      this.db.get('SELECT * FROM proxy_services WHERE service_name = ?', [serviceName], (err, row) => {
+      const sql = `
+        SELECT 
+          ps.*,
+          GROUP_CONCAT(st.tag_id) as tag_ids
+        FROM proxy_services ps
+        LEFT JOIN service_tags st ON ps.id = st.service_id
+        WHERE ps.service_name = ?
+        GROUP BY ps.id
+      `;
+      
+      this.db.get(sql, [serviceName], (err, row) => {
         if (err) {
           reject(err);
         } else if (!row) {
@@ -343,7 +489,7 @@ class Database {
             targets: JSON.parse(row.targets),
             activeTarget: row.active_target,
             isRunning: Boolean(row.is_running),
-            tags: JSON.parse(row.tags || '[]'),
+            tags: row.tag_ids ? row.tag_ids.split(',').filter(Boolean) : [],
             createdAt: row.created_at,
             updatedAt: row.updated_at
           });
@@ -365,6 +511,7 @@ class Database {
             id: row.id,
             name: row.name,
             color: row.color,
+            type: row.type || 'default',
             description: row.description,
             createdAt: row.created_at
           }));
@@ -377,19 +524,19 @@ class Database {
   // 创建标签
   async createTag(tagData) {
     const id = uuidv4();
-    const { name, color = '#409eff', description = '' } = tagData;
+    const { name, color = '#409eff', type = 'default', description = '' } = tagData;
     
     return new Promise((resolve, reject) => {
       const sql = `
-        INSERT INTO tags (id, name, color, description)
-        VALUES (?, ?, ?, ?)
+        INSERT INTO tags (id, name, color, type, description)
+        VALUES (?, ?, ?, ?, ?)
       `;
       
-      this.db.run(sql, [id, name, color, description], function(err) {
+      this.db.run(sql, [id, name, color, type, description], function(err) {
         if (err) {
           reject(err);
         } else {
-          resolve({ id, name, color, description });
+          resolve({ id, name, color, type, description });
         }
       });
     });
@@ -408,6 +555,11 @@ class Database {
     if (updates.color !== undefined) {
       fields.push('color = ?');
       values.push(updates.color);
+    }
+    
+    if (updates.type !== undefined) {
+      fields.push('type = ?');
+      values.push(updates.type);
     }
     
     if (updates.description !== undefined) {
@@ -444,9 +596,28 @@ class Database {
   }
 
   // 根据标签筛选代理服务
-  async getProxyServicesByTags(tagNames) {
+  async getProxyServicesByTags(tagIds) {
     return new Promise((resolve, reject) => {
-      this.db.all('SELECT * FROM proxy_services ORDER BY created_at DESC', (err, rows) => {
+      // 如果没有指定标签，返回所有服务
+      if (!tagIds || tagIds.length === 0) {
+        this.getAllProxyServices().then(resolve).catch(reject);
+        return;
+      }
+
+      // 使用JOIN查询来筛选包含指定标签的服务
+      const placeholders = tagIds.map(() => '?').join(',');
+      const sql = `
+        SELECT DISTINCT
+          ps.*,
+          GROUP_CONCAT(st.tag_id) as tag_ids
+        FROM proxy_services ps
+        INNER JOIN service_tags st ON ps.id = st.service_id
+        WHERE st.tag_id IN (${placeholders})
+        GROUP BY ps.id
+        ORDER BY ps.created_at DESC
+      `;
+      
+      this.db.all(sql, tagIds, (err, rows) => {
         if (err) {
           reject(err);
         } else {
@@ -457,23 +628,81 @@ class Database {
             targets: JSON.parse(row.targets),
             activeTarget: row.active_target,
             isRunning: Boolean(row.is_running),
-            tags: JSON.parse(row.tags || '[]'),
+            tags: row.tag_ids ? row.tag_ids.split(',').filter(Boolean) : [],
             createdAt: row.created_at,
             updatedAt: row.updated_at
           }));
-          
-          // 如果没有指定标签，返回所有服务
-          if (!tagNames || tagNames.length === 0) {
-            resolve(services);
-            return;
-          }
-          
-          // 筛选包含指定标签的服务
-          const filteredServices = services.filter(service => {
-            return tagNames.some(tagName => service.tags.includes(tagName));
+          resolve(services);
+        }
+      });
+    });
+  }
+
+  // 批量为服务添加标签
+  async batchAddServiceTags(serviceIds, tagIds) {
+    return new Promise((resolve, reject) => {
+      this.db.serialize(() => {
+        this.db.run('BEGIN TRANSACTION');
+        
+        let addedRelations = 0;
+        let totalOperations = 0;
+        let completedOperations = 0;
+        let hasError = false;
+
+        // 计算需要插入的关系
+        const insertPromises = [];
+        
+        serviceIds.forEach(serviceId => {
+          tagIds.forEach(tagId => {
+            totalOperations++;
+            
+            // 检查关系是否已存在
+            const checkSql = 'SELECT 1 FROM service_tags WHERE service_id = ? AND tag_id = ?';
+            this.db.get(checkSql, [serviceId, tagId], (checkErr, existingRow) => {
+              if (checkErr && !hasError) {
+                hasError = true;
+                this.db.run('ROLLBACK');
+                reject(checkErr);
+                return;
+              }
+
+              // 如果关系不存在，则插入
+              if (!existingRow) {
+                const insertSql = 'INSERT INTO service_tags (service_id, tag_id) VALUES (?, ?)';
+                this.db.run(insertSql, [serviceId, tagId], (insertErr) => {
+                  if (insertErr && !hasError) {
+                    hasError = true;
+                    this.db.run('ROLLBACK');
+                    reject(insertErr);
+                    return;
+                  }
+
+                  if (!insertErr) {
+                    addedRelations++;
+                  }
+
+                  completedOperations++;
+                  if (completedOperations === totalOperations) {
+                    this.db.run('COMMIT');
+                    resolve({ addedRelations, totalOperations });
+                  }
+                });
+              } else {
+                // 关系已存在，跳过
+                completedOperations++;
+                if (completedOperations === totalOperations) {
+                  this.db.run('COMMIT');
+                  resolve({ addedRelations, totalOperations });
+                }
+              }
+            });
           });
-          
-          resolve(filteredServices);
+        });
+
+        // 如果没有操作要执行
+        if (totalOperations === 0) {
+          this.db.run('COMMIT');
+          resolve({ addedRelations: 0, totalOperations: 0 });
         }
       });
     });

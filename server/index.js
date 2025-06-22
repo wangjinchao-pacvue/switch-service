@@ -633,6 +633,8 @@ app.post('/api/config/first-time-complete', async (req, res) => {
     // 保存本机IP配置
     if (localIPConfig) {
       await database.setLocalIPConfig(localIPConfig);
+      // 清除IP缓存
+      clearLocalIPCache();
     }
     
     // 标记首次配置已完成
@@ -820,21 +822,22 @@ app.get('/api/config/export', async (req, res) => {
   try {
     console.log('开始导出配置数据')
     
-    // 获取所有静态配置数据（排除Eureka和本机IP配置）
-    const [proxyServices, tags, autoStartConfig, portRangeConfig] = await Promise.all([
+    // 获取所有静态配置数据（排除运行时配置）
+    const [proxyServices, tags, debugApis] = await Promise.all([
       database.getAllProxyServices(),
       database.getAllTags(),
-      database.getAutoStartConfig(),
-      database.getPortRangeConfig()
+      database.getDebugApis()
     ])
     
     // 清理运行时状态，只保留配置数据
-    const cleanedServices = proxyServices.map(service => ({
-      ...service,
-      isRunning: false, // 重置运行状态
-      status: null,     // 清除状态
-      activeTarget: Object.keys(service.targets)[0] || 'default' // 重置为第一个目标
-    }))
+    const cleanedServices = proxyServices.map(service => {
+      const { id, port, isRunning, status, createdAt, updatedAt, ...configData } = service
+      return {
+        ...configData,
+        // 重置为第一个目标
+        activeTarget: Object.keys(service.targets)[0] || 'default'
+      }
+    })
     
     const exportData = {
       version: '1.1.0', // 版本升级，标识新的导出格式
@@ -842,15 +845,13 @@ app.get('/api/config/export', async (req, res) => {
       data: {
         proxyServices: cleanedServices,
         tags: tags,
-        autoStartConfig: autoStartConfig, // 自动启动配置
-        portRangeConfig: portRangeConfig  // 端口范围配置
-        // 注意：不包含 eurekaConfig 和 localIPConfig
+        debugApis: debugApis              // API调试配置
       },
-      excludedConfigs: ['eurekaConfig', 'localIPConfig'], // 说明排除了哪些配置
-      description: '此配置文件包含代理服务、标签、自动启动和端口范围配置，但不包含Eureka服务器和本机IP配置'
+      excludedConfigs: ['eurekaConfig', 'localIPConfig', 'autoStartConfig', 'portRangeConfig', 'ports', 'runningStatus'], // 说明排除了哪些配置
+      description: '此配置文件包含代理服务配置、标签和API调试配置，不包含端口、IP、运行状态等运行时配置'
     }
     
-    console.log(`导出完成: ${cleanedServices.length} 个服务, ${tags.length} 个标签`);
+    console.log(`导出完成: ${cleanedServices.length} 个服务, ${tags.length} 个标签, ${Object.keys(debugApis).length} 个服务的API调试配置`);
     
     // 设置下载头
     const filename = `proxy-config-${new Date().toISOString().replace(/[:.]/g, '-')}.json`
@@ -898,28 +899,31 @@ app.post('/api/config/import', async (req, res) => {
       })
     }
     
-    const { proxyServices, tags, autoStartConfig, portRangeConfig } = importData.data
+    const { proxyServices, tags, debugApis } = importData.data
     
     // 统计信息
     const stats = {
       services: { imported: 0, skipped: 0, errors: 0 },
       tags: { imported: 0, skipped: 0, errors: 0 },
-      autoStart: { imported: 0, skipped: 0, errors: 0 },
-      portRange: { imported: 0, skipped: 0, errors: 0 }
+      debugApis: { imported: 0, skipped: 0, errors: 0 }
     }
     
     // 导入标签数据
     if (tags && Array.isArray(tags)) {
+      // 一次性获取现有标签，避免重复查询
+      const existingTags = await database.getAllTags()
+      const existingTagNames = new Set(existingTags.map(t => t.name))
+      
       for (const tag of tags) {
         try {
-          // 检查标签是否已存在
-          const existingTags = await database.getAllTags()
-          const exists = existingTags.some(t => t.name === tag.name)
-          
-          if (!exists) {
+          if (!existingTagNames.has(tag.name)) {
             await database.createTag(tag)
             stats.tags.imported++
+            // 添加到已存在集合中，避免重复导入
+            existingTagNames.add(tag.name)
+            console.log(`导入标签: ${tag.name}`)
           } else {
+            console.log(`跳过标签: ${tag.name}（已存在）`)
             stats.tags.skipped++
           }
         } catch (error) {
@@ -931,20 +935,21 @@ app.post('/api/config/import', async (req, res) => {
     
     // 导入代理服务
     if (proxyServices && Array.isArray(proxyServices)) {
+      // 一次性获取现有服务，避免重复查询
+      const existingServices = await database.getAllProxyServices()
+      const existingServiceNames = new Set(existingServices.map(s => s.serviceName))
+      
       for (const service of proxyServices) {
         try {
-          // 检查服务是否已存在（根据serviceName+port）
-          const existingServices = await database.getAllProxyServices()
-          const exists = existingServices.some(s => 
-            s.serviceName === service.serviceName && s.port === service.port
-          )
-          
-          if (!exists) {
-            // 创建新服务（去除id字段让数据库自动生成）
-            const { id, ...serviceData } = service
-            await database.createProxyService(serviceData)
+          if (!existingServiceNames.has(service.serviceName)) {
+            // 创建新服务，让系统自动分配端口
+            await database.createProxyService(service)
             stats.services.imported++
+            // 添加到已存在集合中，避免重复导入
+            existingServiceNames.add(service.serviceName)
+            console.log(`导入服务: ${service.serviceName}`)
           } else {
+            console.log(`跳过服务: ${service.serviceName}（已存在）`)
             stats.services.skipped++
           }
         } catch (error) {
@@ -954,44 +959,83 @@ app.post('/api/config/import', async (req, res) => {
       }
     }
     
-    // 导入自动启动配置
-    if (autoStartConfig) {
-      try {
-        await database.updateAutoStartConfig(autoStartConfig.serviceIds || []);
-        console.log('自动启动配置已导入');
-        stats.autoStart.imported = 1;
-      } catch (error) {
-        console.error('导入自动启动配置失败:', error);
-        stats.autoStart.errors = 1;
+
+    
+    // 导入API调试配置
+    if (debugApis && typeof debugApis === 'object') {
+      // 获取现有的API调试配置和服务列表
+      const existingDebugApis = await database.getDebugApis()
+      const existingServices = await database.getAllProxyServices()
+      const existingServiceNames = new Set(existingServices.map(s => s.serviceName))
+      
+      for (const [serviceName, apis] of Object.entries(debugApis)) {
+        try {
+          if (!existingServiceNames.has(serviceName)) {
+            console.log(`跳过服务 ${serviceName} 的API调试配置：服务不存在`)
+            stats.debugApis.skipped++
+            continue
+          }
+          
+          // 检查该服务是否已经有API调试配置
+          if (existingDebugApis[serviceName] && existingDebugApis[serviceName].length > 0) {
+            console.log(`跳过服务 ${serviceName} 的API调试配置：已存在 ${existingDebugApis[serviceName].length} 个接口`)
+            stats.debugApis.skipped++
+            continue
+          }
+          
+          if (Array.isArray(apis) && apis.length > 0) {
+            await database.saveDebugApis(serviceName, apis)
+            stats.debugApis.imported++
+            console.log(`导入服务 ${serviceName} 的API调试配置，共 ${apis.length} 个接口`)
+          } else {
+            console.log(`跳过服务 ${serviceName} 的API调试配置：无有效接口数据`)
+            stats.debugApis.skipped++
+          }
+        } catch (error) {
+          console.error(`导入服务 ${serviceName} 的API调试配置失败:`, error)
+          stats.debugApis.errors++
+        }
       }
     }
     
-    // 导入端口范围配置
-    if (portRangeConfig) {
-      try {
-        await database.setPortRangeConfig(portRangeConfig);
-        console.log('端口范围配置已导入');
-        stats.portRange.imported = 1;
-      } catch (error) {
-        console.error('导入端口范围配置失败:', error);
-        stats.portRange.errors = 1;
-      }
-    }
-    
-    console.log('导入完成');
+    console.log('配置导入完成，统计信息：', stats);
     
     // 重建代理服务器映射
     await rebuildProxyServersMap()
     
-
-    
     // 清理所有内存缓存（因为导入时所有服务都是停止状态）
     clearAllMemoryCaches()
     
+    // 生成详细的导入报告
+    const totalImported = stats.services.imported + stats.tags.imported + stats.debugApis.imported
+    const totalSkipped = stats.services.skipped + stats.tags.skipped + stats.debugApis.skipped
+    const totalErrors = stats.services.errors + stats.tags.errors + stats.debugApis.errors
+    
+    let message = '配置导入完成'
+    if (totalImported > 0) {
+      message += `，成功导入 ${totalImported} 项`
+    }
+    if (totalSkipped > 0) {
+      message += `，跳过 ${totalSkipped} 项已存在的数据`
+    }
+    if (totalErrors > 0) {
+      message += `，${totalErrors} 项导入失败`
+    }
+    
     res.json({ 
       success: true, 
-      message: '配置导入完成',
-      stats: stats
+      message: message,
+      stats: stats,
+      summary: {
+        totalImported,
+        totalSkipped, 
+        totalErrors,
+        details: {
+          services: `导入 ${stats.services.imported}，跳过 ${stats.services.skipped}，失败 ${stats.services.errors}`,
+          tags: `导入 ${stats.tags.imported}，跳过 ${stats.tags.skipped}，失败 ${stats.tags.errors}`,
+          debugApis: `导入 ${stats.debugApis.imported}，跳过 ${stats.debugApis.skipped}，失败 ${stats.debugApis.errors}`
+        }
+      }
     })
     
   } catch (error) {
@@ -1334,7 +1378,7 @@ app.get('/api/system/logs/:logId/request-details', async (req, res) => {
 });
 
 // 批量启动代理服务
-app.post('/api/proxy/batch/start', async (req, res) => {
+app.post('/api/proxy/batchStart', async (req, res) => {
   try {
     const { ids } = req.body;
     
@@ -1364,13 +1408,23 @@ app.post('/api/proxy/batch/start', async (req, res) => {
         // 获取更新后的服务状态
         const updatedService = await database.getProxyServiceById(id);
         results.push(updatedService);
-        broadcast({ type: 'proxy_started', data: updatedService });
         
         // 静默成功，不记录日志
       } catch (error) {
         console.error(`批量启动失败 ${id}:`, error);
         errors.push({ id, error: error.message });
       }
+    }
+
+    // 只发送一次批量更新的WebSocket广播
+    if (results.length > 0) {
+      broadcast({ 
+        type: 'batch_services_started', 
+        data: { 
+          services: results,
+          count: results.length
+        } 
+      });
     }
 
     res.json({ 
@@ -1389,7 +1443,7 @@ app.post('/api/proxy/batch/start', async (req, res) => {
 });
 
 // 批量停止代理服务
-app.post('/api/proxy/batch/stop', async (req, res) => {
+app.post('/api/proxy/batchStop', async (req, res) => {
   try {
     const { ids } = req.body;
     
@@ -1419,13 +1473,23 @@ app.post('/api/proxy/batch/stop', async (req, res) => {
         // 获取更新后的服务状态
         const updatedService = await database.getProxyServiceById(id);
         results.push(updatedService);
-        broadcast({ type: 'proxy_stopped', data: updatedService });
         
         // 静默成功，不记录日志
       } catch (error) {
         console.error(`批量停止失败 ${id}:`, error);
         errors.push({ id, error: error.message });
       }
+    }
+
+    // 只发送一次批量更新的WebSocket广播
+    if (results.length > 0) {
+      broadcast({ 
+        type: 'batch_services_stopped', 
+        data: { 
+          services: results,
+          count: results.length
+        } 
+      });
     }
 
     res.json({ 
@@ -1640,14 +1704,20 @@ app.put('/api/proxy/:id', async (req, res) => {
       return res.status(404).json({ success: false, error: '服务不存在' });
     }
 
-    // 如果服务正在运行，只能更新targets（添加新路由）
+    // 如果服务正在运行，只能更新特定字段（targets和tags）
     if (service.isRunning) {
       const allowedUpdates = {};
       if (updates.targets) {
         allowedUpdates.targets = updates.targets;
       }
+      if (updates.tags !== undefined) {
+        allowedUpdates.tags = updates.tags;
+      }
+      if (updates.activeTarget) {
+        allowedUpdates.activeTarget = updates.activeTarget;
+      }
       if (Object.keys(allowedUpdates).length === 0) {
-        return res.status(400).json({ success: false, error: '运行中的服务只能添加新的路由目标' });
+        return res.status(400).json({ success: false, error: '运行中的服务只能修改路由目标和标签' });
       }
       await database.updateProxyService(id, allowedUpdates);
     } else {
@@ -1696,99 +1766,6 @@ app.delete('/api/proxy/:id', async (req, res) => {
     res.json({ success: true, message: `代理服务 ${service.serviceName} 已删除` });
   } catch (error) {
     console.error('Failed to delete proxy service:', error);
-    res.status(500).json({ success: false, error: error.message });
-  }
-});
-
-// ===== 标签管理API =====
-
-// 获取所有标签
-app.get('/api/tags', async (req, res) => {
-  try {
-    const tags = await database.getAllTags();
-    res.json({ success: true, data: tags });
-  } catch (error) {
-    console.error('Failed to get tags:', error);
-    res.status(500).json({ success: false, error: error.message });
-  }
-});
-
-// 创建新标签
-app.post('/api/tags', async (req, res) => {
-  try {
-    const { name, color, description } = req.body;
-    
-    if (!name) {
-      return res.status(400).json({ success: false, error: '标签名称不能为空' });
-    }
-    
-    const tag = await database.createTag({ name, color, description });
-    broadcast({ type: 'tag_created', data: tag });
-    
-    res.json({ success: true, data: tag, message: `标签 ${name} 创建成功` });
-  } catch (error) {
-    console.error('Failed to create tag:', error);
-    if (error.message.includes('UNIQUE constraint failed')) {
-      res.status(400).json({ success: false, error: '标签名称已存在' });
-    } else {
-      res.status(500).json({ success: false, error: error.message });
-    }
-  }
-});
-
-// 更新标签
-app.put('/api/tags/:id', async (req, res) => {
-  try {
-    const { id } = req.params;
-    const { name, color, description } = req.body;
-    
-    const result = await database.updateTag(id, { name, color, description });
-    
-    if (result.changes === 0) {
-      return res.status(404).json({ success: false, error: '标签不存在' });
-    }
-    
-    broadcast({ type: 'tag_updated', data: { id, name, color, description } });
-    
-    res.json({ success: true, message: `标签更新成功` });
-  } catch (error) {
-    console.error('Failed to update tag:', error);
-    if (error.message.includes('UNIQUE constraint failed')) {
-      res.status(400).json({ success: false, error: '标签名称已存在' });
-    } else {
-      res.status(500).json({ success: false, error: error.message });
-    }
-  }
-});
-
-// 删除标签
-app.delete('/api/tags/:id', async (req, res) => {
-  try {
-    const { id } = req.params;
-    
-    const result = await database.deleteTag(id);
-    
-    if (result.changes === 0) {
-      return res.status(404).json({ success: false, error: '标签不存在' });
-    }
-    
-    // 从所有服务中移除该标签
-    const services = await database.getAllProxyServices();
-    for (const service of services) {
-      if (service.tags && service.tags.length > 0) {
-        const tagName = await getTagNameById(id); // 需要实现这个辅助函数
-        if (tagName && service.tags.includes(tagName)) {
-          const updatedTags = service.tags.filter(tag => tag !== tagName);
-          await database.updateProxyService(service.id, { tags: updatedTags });
-        }
-      }
-    }
-    
-    broadcast({ type: 'tag_deleted', data: { id } });
-    
-    res.json({ success: true, message: `标签已删除` });
-  } catch (error) {
-    console.error('Failed to delete tag:', error);
     res.status(500).json({ success: false, error: error.message });
   }
 });
@@ -1845,6 +1822,172 @@ app.delete('/api/proxy/:id/tags/:tagName', async (req, res) => {
     res.json({ success: true, data: updatedService, message: `标签移除成功` });
   } catch (error) {
     console.error('Failed to remove tag from service:', error);
+    res.status(500).json({ success: false, error: error.message });
+  }
+});
+
+// ===== 标签管理API =====
+
+// 获取所有标签
+app.get('/api/tags', async (req, res) => {
+  try {
+    const tags = await database.getAllTags();
+    res.json({ success: true, data: tags });
+  } catch (error) {
+    console.error('Failed to get tags:', error);
+    res.status(500).json({ success: false, error: error.message });
+  }
+});
+
+// 创建新标签
+app.post('/api/tags', async (req, res) => {
+  try {
+    const { name, color, type, description } = req.body;
+    
+    if (!name) {
+      return res.status(400).json({ success: false, error: '标签名称不能为空' });
+    }
+    
+    const tag = await database.createTag({ name, color, type, description });
+    broadcast({ type: 'tag_created', data: tag });
+    
+    res.json({ success: true, data: tag, message: `标签 ${name} 创建成功` });
+  } catch (error) {
+    console.error('Failed to create tag:', error);
+    if (error.message.includes('UNIQUE constraint failed')) {
+      res.status(400).json({ success: false, error: '标签名称已存在' });
+    } else {
+      res.status(500).json({ success: false, error: error.message });
+    }
+  }
+});
+
+// 更新标签
+app.put('/api/tags/:id', async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { name, color, type, description } = req.body;
+    
+    const result = await database.updateTag(id, { name, color, type, description });
+    
+    if (result.changes === 0) {
+      return res.status(404).json({ success: false, error: '标签不存在' });
+    }
+    
+    broadcast({ type: 'tag_updated', data: { id, name, color, type, description } });
+    
+    res.json({ success: true, message: `标签更新成功` });
+  } catch (error) {
+    console.error('Failed to update tag:', error);
+    if (error.message.includes('UNIQUE constraint failed')) {
+      res.status(400).json({ success: false, error: '标签名称已存在' });
+    } else {
+      res.status(500).json({ success: false, error: error.message });
+    }
+  }
+});
+
+// 删除标签
+app.delete('/api/tags/:id', async (req, res) => {
+  try {
+    const { id } = req.params;
+    
+    const result = await database.deleteTag(id);
+    
+    if (result.changes === 0) {
+      return res.status(404).json({ success: false, error: '标签不存在' });
+    }
+    
+    // 从所有服务中移除该标签
+    const services = await database.getAllProxyServices();
+    for (const service of services) {
+      if (service.tags && service.tags.length > 0) {
+        const tagName = await getTagNameById(id); // 需要实现这个辅助函数
+        if (tagName && service.tags.includes(tagName)) {
+          const updatedTags = service.tags.filter(tag => tag !== tagName);
+          await database.updateProxyService(service.id, { tags: updatedTags });
+        }
+      }
+    }
+    
+    broadcast({ type: 'tag_deleted', data: { id } });
+    
+    res.json({ success: true, message: `标签已删除` });
+  } catch (error) {
+    console.error('Failed to delete tag:', error);
+    res.status(500).json({ success: false, error: error.message });
+  }
+});
+
+// 批量为服务添加标签
+app.post('/api/proxy/batchTags', async (req, res) => {
+  try {
+    const { serviceIds, tagIds } = req.body;
+    
+    if (!Array.isArray(serviceIds) || serviceIds.length === 0) {
+      return res.status(400).json({ success: false, error: '请提供有效的服务ID列表' });
+    }
+    
+    if (!Array.isArray(tagIds) || tagIds.length === 0) {
+      return res.status(400).json({ success: false, error: '请提供有效的标签ID列表' });
+    }
+
+    // 使用批量添加标签的数据库方法
+    const result = await database.batchAddServiceTags(serviceIds, tagIds);
+    
+    // 获取更新后的服务数据
+    const updatedServices = [];
+    for (const serviceId of serviceIds) {
+      const service = await database.getProxyServiceById(serviceId);
+      if (service) {
+        updatedServices.push(service);
+      }
+    }
+
+    // 只发送一次批量更新的WebSocket广播
+    if (updatedServices.length > 0) {
+      broadcast({ 
+        type: 'batch_tags_updated', 
+        data: { 
+          services: updatedServices,
+          addedTagIds: tagIds
+        } 
+      });
+    }
+
+    // 计算统计信息
+    const totalPossibleRelations = serviceIds.length * tagIds.length;
+    const skippedRelations = totalPossibleRelations - result.addedRelations;
+    
+    let message = '';
+    if (result.addedRelations > 0) {
+      message += `成功添加 ${result.addedRelations} 个标签关联`;
+    }
+    if (skippedRelations > 0) {
+      if (message) message += '，';
+      message += `跳过 ${skippedRelations} 个已存在的关联`;
+    }
+    if (!message) {
+      message = '所有标签关联都已存在，无需添加';
+    }
+
+    console.log(`批量添加标签完成: ${result.addedRelations}/${totalPossibleRelations} 个关联已添加`);
+
+    res.json({ 
+      success: true, 
+      message: message,
+      stats: {
+        addedRelations: result.addedRelations,
+        skippedRelations: skippedRelations,
+        totalPossibleRelations: totalPossibleRelations,
+        servicesCount: serviceIds.length,
+        tagsCount: tagIds.length
+      },
+      total: serviceIds.length,
+      succeeded: updatedServices.length
+    });
+  } catch (error) {
+    console.error('批量添加标签失败:', error);
     res.status(500).json({ success: false, error: error.message });
   }
 });
@@ -1980,14 +2123,31 @@ async function getTagNameById(tagId) {
 
 
 
-// 获取本地IP地址（支持数据库配置覆盖）
+// 本机IP缓存
+let cachedLocalIP = null;
+let lastIPFetchTime = 0;
+const IP_CACHE_DURATION = 5 * 60 * 1000; // 5分钟缓存
+
+// 获取本地IP地址（支持数据库配置覆盖，带缓存）
 async function getLocalIP() {
+  const now = Date.now();
+  
+  // 如果缓存有效，直接返回缓存值
+  if (cachedLocalIP && (now - lastIPFetchTime) < IP_CACHE_DURATION) {
+    return cachedLocalIP;
+  }
+  
   try {
     // 1. 首先检查数据库中的配置
     const localIPConfig = await database.getLocalIPConfig();
     if (localIPConfig && localIPConfig.localIP) {
-      console.log(`使用数据库配置的本机IP: ${localIPConfig.localIP}`);
-      return localIPConfig.localIP;
+      // 只在IP发生变化或首次获取时打印日志
+      if (cachedLocalIP !== localIPConfig.localIP) {
+        console.log(`使用数据库配置的本机IP: ${localIPConfig.localIP}`);
+      }
+      cachedLocalIP = localIPConfig.localIP;
+      lastIPFetchTime = now;
+      return cachedLocalIP;
     }
   } catch (error) {
     console.warn('获取数据库中的本机IP配置失败:', error.message);
@@ -1995,18 +2155,37 @@ async function getLocalIP() {
 
   // 2. 检查环境变量（优先级次高）
   if (process.env.LOCAL_IP) {
-    console.log(`使用环境变量 LOCAL_IP: ${process.env.LOCAL_IP}`);
-    return process.env.LOCAL_IP;
+    if (cachedLocalIP !== process.env.LOCAL_IP) {
+      console.log(`使用环境变量 LOCAL_IP: ${process.env.LOCAL_IP}`);
+    }
+    cachedLocalIP = process.env.LOCAL_IP;
+    lastIPFetchTime = now;
+    return cachedLocalIP;
   }
   
   if (process.env.HOST_IP) {
-    console.log(`使用环境变量 HOST_IP: ${process.env.HOST_IP}`);
-    return process.env.HOST_IP;
+    if (cachedLocalIP !== process.env.HOST_IP) {
+      console.log(`使用环境变量 HOST_IP: ${process.env.HOST_IP}`);
+    }
+    cachedLocalIP = process.env.HOST_IP;
+    lastIPFetchTime = now;
+    return cachedLocalIP;
   }
   
   // 3. 容器环境下默认使用127.0.0.1（用户本地访问地址）
-  console.log('使用默认本机IP: 127.0.0.1（用户本地访问地址）');
-  return '127.0.0.1';
+  if (cachedLocalIP !== '127.0.0.1') {
+    console.log('使用默认本机IP: 127.0.0.1（用户本地访问地址）');
+  }
+  cachedLocalIP = '127.0.0.1';
+  lastIPFetchTime = now;
+  return cachedLocalIP;
+}
+
+// 清除IP缓存的函数（当IP配置更新时调用）
+function clearLocalIPCache() {
+  cachedLocalIP = null;
+  lastIPFetchTime = 0;
+  console.log('本机IP缓存已清除');
 }
 
 // 统一生成实例ID的函数
@@ -3056,6 +3235,9 @@ app.post('/api/config/local-ip', async (req, res) => {
     
     const localIPConfig = { localIP };
     await database.setLocalIPConfig(localIPConfig);
+    
+    // 清除IP缓存，强制下次获取时重新读取
+    clearLocalIPCache();
     
     console.log('本机IP配置已更新并保存到数据库:', localIPConfig);
     

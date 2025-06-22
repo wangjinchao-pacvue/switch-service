@@ -1,6 +1,6 @@
 import { createRouter, createWebHistory } from 'vue-router'
-import Dashboard from '../views/Dashboard.vue'
-import ApiDebugger from '../views/ApiDebugger.vue'
+import Dashboard from '../views/DashboardNaive.vue'
+import ApiDebugger from '../views/ApiDebuggerNaive.vue'
 
 const routes = [
   {

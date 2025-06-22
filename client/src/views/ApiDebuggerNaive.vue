@@ -26,13 +26,19 @@
               style="width: 140px;"
               :options="environmentOptions"
             />
+          </div>
+          
+          <!-- 环境URL显示 -->
+          <div class="toolbar-item environment-url-item" v-if="selectedService">
             <n-tooltip v-if="currentEnvironmentUrl" trigger="hover">
               <template #trigger>
-                <span class="environment-url">{{ currentEnvironmentUrl }}</span>
+                <div class="environment-url-display">
+                  <span class="environment-url">{{ currentEnvironmentUrl }}</span>
+                </div>
               </template>
               环境地址: {{ currentEnvironmentUrl }}
             </n-tooltip>
-            <span v-else class="environment-url text-muted">未配置</span>
+            <span v-else class="environment-url text-muted">未配置环境地址</span>
           </div>
 
           <!-- 接口选择 -->
@@ -52,7 +58,7 @@
         <div class="toolbar-right">
           <!-- 变量管理按钮 -->
           <n-button 
-            type="success" 
+            type="primary" 
             @click="showVariablesDialog = true"
             secondary
           >
@@ -455,7 +461,7 @@
               <div v-else class="no-response">
                 <n-empty description="暂无响应数据">
                   <template #icon>
-                    <n-icon size="48" color="#00d9ff">
+                    <n-icon size="48">
                       <RocketIcon />
                     </n-icon>
                   </template>
@@ -475,7 +481,7 @@
       <n-card class="empty-panel">
         <n-empty description="请选择代理服务和接口开始调试">
           <template #icon>
-            <n-icon size="48" color="#18a058">
+            <n-icon size="48">
               <ToolIcon />
             </n-icon>
           </template>
@@ -782,10 +788,15 @@ const apiSelectOptions = computed(() => {
       type: 'group',
       label: '接口列表',
       key: 'apis',
-      children: currentServiceApis.value.map(api => ({
-        label: `${api.name || api.path} (${api.method})`,
-        value: api.id
-      }))
+      children: currentServiceApis.value.map(api => {
+        const displayName = api.name || api.path
+        const label = api.name ? `${api.name} (${api.method}) - ${api.path}` : `${api.path} (${api.method})`
+        
+        return {
+          label: label,
+          value: api.id
+        }
+      })
     })
   }
   
@@ -1719,19 +1730,30 @@ onMounted(async () => {
   white-space: nowrap;
 }
 
+.environment-url-item {
+  flex: 1;
+  min-width: 0;
+}
+
+.environment-url-display {
+  display: flex;
+  align-items: center;
+  min-width: 0;
+}
+
 .environment-url {
   font-family: 'JetBrains Mono', 'Fira Code', 'Consolas', 'Monaco', 'Courier New', monospace;
   font-size: 12px;
   color: var(--text-color-secondary);
-  max-width: 300px;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-  margin-left: 8px;
   padding: 4px 8px;
   background-color: var(--bg-color-secondary);
   border-radius: 4px;
   border: 1px solid var(--border-color);
+  min-width: 0;
+  flex: 1;
 }
 
 .text-muted {

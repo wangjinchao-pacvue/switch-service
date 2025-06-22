@@ -2786,10 +2786,10 @@ const toggleHeartbeatCollapse = () => {
 }
 
 const connectLogWebSocket = (serviceName) => {
-  // 通过端口号区分开发环境和生产环境
+  // 通过环境变量区分开发环境和生产环境
   let wsUrl
-  if (window.location.port === '5176') {
-    // 开发环境：前端运行在5176端口，后端在5175端口
+  if (import.meta.env.DEV) {
+    // 开发环境：后端运行在5175端口
     wsUrl = `ws://${window.location.hostname}:5175`
   } else {
     // 生产环境：使用当前页面的协议和端口
@@ -4201,10 +4201,10 @@ const debouncedFetchEurekaServices = () => {
 
 // WebSocket连接管理
 const initWebSocket = () => {
-  // 通过端口号区分开发环境和生产环境
+  // 通过环境变量区分开发环境和生产环境
   let wsUrl
-  if (window.location.port === '5176') {
-    // 开发环境：前端运行在5176端口，后端在5175端口
+  if (import.meta.env.DEV) {
+    // 开发环境：后端运行在5175端口
     wsUrl = `ws://${window.location.hostname}:5175`
   } else {
     // 生产环境：使用当前页面的协议和端口

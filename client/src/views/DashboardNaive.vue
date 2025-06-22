@@ -2786,13 +2786,13 @@ const toggleHeartbeatCollapse = () => {
 }
 
 const connectLogWebSocket = (serviceName) => {
-  // 开发环境使用5175，生产环境使用当前页面的协议和端口
+  // 通过端口号区分开发环境和生产环境
   let wsUrl
-  if (window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1') {
-    // 开发环境：明确使用5175端口
+  if (window.location.port === '5176') {
+    // 开发环境：前端运行在5176端口，后端在5175端口
     wsUrl = `ws://${window.location.hostname}:5175`
   } else {
-    // 生产环境：使用当前页面的端口，如果没有端口则使用默认端口
+    // 生产环境：使用当前页面的协议和端口
     const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:'
     const port = window.location.port ? `:${window.location.port}` : ''
     wsUrl = `${protocol}//${window.location.hostname}${port}`
@@ -4201,13 +4201,13 @@ const debouncedFetchEurekaServices = () => {
 
 // WebSocket连接管理
 const initWebSocket = () => {
-  // 开发环境使用5175，生产环境使用当前页面的协议和端口
+  // 通过端口号区分开发环境和生产环境
   let wsUrl
-  if (window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1') {
-    // 开发环境：明确使用5175端口
+  if (window.location.port === '5176') {
+    // 开发环境：前端运行在5176端口，后端在5175端口
     wsUrl = `ws://${window.location.hostname}:5175`
   } else {
-    // 生产环境：使用当前页面的端口，如果没有端口则使用默认端口
+    // 生产环境：使用当前页面的协议和端口
     const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:'
     const port = window.location.port ? `:${window.location.port}` : ''
     wsUrl = `${protocol}//${window.location.hostname}${port}`

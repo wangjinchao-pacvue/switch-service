@@ -333,6 +333,60 @@ export const useAppStore = defineStore('app', {
         html.classList.add('light')
         html.classList.remove('dark')
       }
+    },
+
+    // 导出配置
+    async exportConfig() {
+      try {
+        this.loading = true
+        const response = await axios.get('/api/config/export')
+        const blob = new Blob([JSON.stringify(response.data, null, 2)], {
+          type: 'application/json'
+        })
+        const url = URL.createObjectURL(blob)
+        const a = document.createElement('a')
+        a.href = url
+        a.download = `proxy-config-${new Date().toISOString().split('T')[0]}.json`
+        a.click()
+        URL.revokeObjectURL(url)
+        return { success: true }
+      } catch (error) {
+        console.error('Failed to export config:', error)
+        throw error
+      } finally {
+        this.loading = false
+      }
+    },
+
+    // 导入配置
+    async importConfig(file) {
+      try {
+        this.loading = true
+        const text = await file.text()
+        const importData = JSON.parse(text)
+        
+        // 验证文件格式
+        if (!importData.data || !importData.version) {
+          throw new Error('无效的配置文件格式')
+        }
+        
+        const response = await axios.post('/api/config/import', importData)
+        
+        if (response.data.success) {
+          // 刷新数据
+          await Promise.all([
+            this.fetchProxyServices(),
+            this.fetchProxyStats()
+          ])
+        }
+        
+        return response.data
+      } catch (error) {
+        console.error('Failed to import config:', error)
+        throw error
+      } finally {
+        this.loading = false
+      }
     }
   }
 }) 

@@ -78,6 +78,16 @@
                     {{ hasRunningServices ? `有 ${runningServicesCount} 个服务正在运行，需要先停止所有服务` : '导入配置文件' }}
                   </n-tooltip>
 
+                  <!-- 隐藏的文件输入 -->
+                  <input 
+                    ref="fileInputRef" 
+                    type="file" 
+                    accept=".json" 
+                    @change="handleFileImport" 
+                    style="display: none;" 
+                  />
+
+
                   <!-- 主题切换按钮 -->
                   <n-tooltip :delay="500">
                     <template #trigger>
@@ -97,14 +107,7 @@
                     {{ appStore.theme === 'light' ? '切换到暗色模式' : '切换到亮色模式' }}
                   </n-tooltip>
 
-                  <!-- 隐藏的文件输入 -->
-                  <input 
-                    ref="fileInputRef" 
-                    type="file" 
-                    accept=".json" 
-                    @change="handleFileImport" 
-                    style="display: none;" 
-                  />
+
                 </div>
               </div>
             </n-layout-header>

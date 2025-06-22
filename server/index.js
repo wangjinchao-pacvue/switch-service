@@ -829,9 +829,23 @@ app.get('/api/config/export', async (req, res) => {
       database.getDebugApis()
     ])
     
+    // 获取服务标签关联数据（包含服务名称）
+    const serviceTagsQuery = `
+      SELECT st.service_id, st.tag_id, ps.service_name
+      FROM service_tags st
+      JOIN proxy_services ps ON st.service_id = ps.id
+      ORDER BY ps.service_name, st.tag_id
+    `
+    const serviceTags = await new Promise((resolve, reject) => {
+      database.db.all(serviceTagsQuery, (err, rows) => {
+        if (err) reject(err)
+        else resolve(rows)
+      })
+    })
+    
     // 清理运行时状态，只保留配置数据
     const cleanedServices = proxyServices.map(service => {
-      const { id, port, isRunning, status, createdAt, updatedAt, ...configData } = service
+      const { id, port, isRunning, status, createdAt, updatedAt, tags, ...configData } = service
       return {
         ...configData,
         // 重置为第一个目标
@@ -840,18 +854,19 @@ app.get('/api/config/export', async (req, res) => {
     })
     
     const exportData = {
-      version: '1.1.0', // 版本升级，标识新的导出格式
+      version: '1.2.0', // 版本升级，标识支持多对多关系的导出格式
       exportTime: new Date().toISOString(),
       data: {
         proxyServices: cleanedServices,
         tags: tags,
-        debugApis: debugApis              // API调试配置
+        serviceTags: serviceTags,        // 新增：服务标签关联数据
+        debugApis: debugApis             // API调试配置
       },
       excludedConfigs: ['eurekaConfig', 'localIPConfig', 'autoStartConfig', 'portRangeConfig', 'ports', 'runningStatus'], // 说明排除了哪些配置
-      description: '此配置文件包含代理服务配置、标签和API调试配置，不包含端口、IP、运行状态等运行时配置'
+      description: '此配置文件包含代理服务配置、标签、服务标签关联关系和API调试配置，不包含端口、IP、运行状态等运行时配置'
     }
     
-    console.log(`导出完成: ${cleanedServices.length} 个服务, ${tags.length} 个标签, ${Object.keys(debugApis).length} 个服务的API调试配置`);
+    console.log(`导出完成: ${cleanedServices.length} 个服务, ${tags.length} 个标签, ${serviceTags.length} 个服务标签关联, ${Object.keys(debugApis).length} 个服务的API调试配置`);
     
     // 设置下载头
     const filename = `proxy-config-${new Date().toISOString().replace(/[:.]/g, '-')}.json`
@@ -899,12 +914,13 @@ app.post('/api/config/import', async (req, res) => {
       })
     }
     
-    const { proxyServices, tags, debugApis } = importData.data
+    const { proxyServices, tags, serviceTags, debugApis } = importData.data
     
     // 统计信息
     const stats = {
       services: { imported: 0, skipped: 0, errors: 0 },
       tags: { imported: 0, skipped: 0, errors: 0 },
+      serviceTags: { imported: 0, skipped: 0, errors: 0 },
       debugApis: { imported: 0, skipped: 0, errors: 0 }
     }
     
@@ -934,19 +950,28 @@ app.post('/api/config/import', async (req, res) => {
     }
     
     // 导入代理服务
+    const serviceNameToIdMap = new Map() // 用于映射服务名称到新的ID
+    
     if (proxyServices && Array.isArray(proxyServices)) {
       // 一次性获取现有服务，避免重复查询
       const existingServices = await database.getAllProxyServices()
       const existingServiceNames = new Set(existingServices.map(s => s.serviceName))
       
+      // 为已存在的服务建立映射
+      existingServices.forEach(service => {
+        serviceNameToIdMap.set(service.serviceName, service.id)
+      })
+      
       for (const service of proxyServices) {
         try {
           if (!existingServiceNames.has(service.serviceName)) {
             // 创建新服务，让系统自动分配端口
-            await database.createProxyService(service)
+            const newService = await database.createProxyService(service)
             stats.services.imported++
             // 添加到已存在集合中，避免重复导入
             existingServiceNames.add(service.serviceName)
+            // 建立服务名称到新ID的映射
+            serviceNameToIdMap.set(service.serviceName, newService.id || service.serviceName)
             console.log(`导入服务: ${service.serviceName}`)
           } else {
             console.log(`跳过服务: ${service.serviceName}（已存在）`)
@@ -959,7 +984,61 @@ app.post('/api/config/import', async (req, res) => {
       }
     }
     
-
+    // 导入服务标签关联数据
+    if (serviceTags && Array.isArray(serviceTags)) {
+      // 重新获取最新的服务和标签数据（包含刚导入的）
+      const [existingTags, currentServices] = await Promise.all([
+        database.getAllTags(),
+        database.getAllProxyServices()
+      ])
+      
+      // 构建当前服务名称到ID的映射
+      const serviceNameToIdMap = new Map()
+      currentServices.forEach(service => {
+        serviceNameToIdMap.set(service.serviceName, service.id)
+      })
+      
+      const tagIdMap = new Map(existingTags.map(tag => [tag.id, tag.id]))
+      
+      for (const relation of serviceTags) {
+        try {
+          const { service_name: serviceName, tag_id: tagId } = relation
+          
+          // 通过服务名称找到当前的服务ID
+          const currentServiceId = serviceNameToIdMap.get(serviceName)
+          
+          if (!currentServiceId) {
+            console.log(`跳过服务标签关联: 服务 ${serviceName} 不存在`)
+            stats.serviceTags.skipped++
+            continue
+          }
+          
+          if (!tagIdMap.has(tagId)) {
+            console.log(`跳过服务标签关联: 标签ID ${tagId} 不存在`)
+            stats.serviceTags.skipped++
+            continue
+          }
+          
+          // 插入服务标签关联
+          await new Promise((resolve, reject) => {
+            database.db.run(
+              'INSERT OR IGNORE INTO service_tags (service_id, tag_id) VALUES (?, ?)',
+              [currentServiceId, tagId],
+              function(err) {
+                if (err) reject(err)
+                else resolve()
+              }
+            )
+          })
+          
+          stats.serviceTags.imported++
+          console.log(`导入服务标签关联: ${serviceName} -> 标签ID ${tagId}`)
+        } catch (error) {
+          console.error(`导入服务标签关联失败:`, relation, error)
+          stats.serviceTags.errors++
+        }
+      }
+    }
     
     // 导入API调试配置
     if (debugApis && typeof debugApis === 'object') {
@@ -1007,9 +1086,9 @@ app.post('/api/config/import', async (req, res) => {
     clearAllMemoryCaches()
     
     // 生成详细的导入报告
-    const totalImported = stats.services.imported + stats.tags.imported + stats.debugApis.imported
-    const totalSkipped = stats.services.skipped + stats.tags.skipped + stats.debugApis.skipped
-    const totalErrors = stats.services.errors + stats.tags.errors + stats.debugApis.errors
+    const totalImported = stats.services.imported + stats.tags.imported + stats.serviceTags.imported + stats.debugApis.imported
+    const totalSkipped = stats.services.skipped + stats.tags.skipped + stats.serviceTags.skipped + stats.debugApis.skipped
+    const totalErrors = stats.services.errors + stats.tags.errors + stats.serviceTags.errors + stats.debugApis.errors
     
     let message = '配置导入完成'
     if (totalImported > 0) {
@@ -1033,6 +1112,7 @@ app.post('/api/config/import', async (req, res) => {
         details: {
           services: `导入 ${stats.services.imported}，跳过 ${stats.services.skipped}，失败 ${stats.services.errors}`,
           tags: `导入 ${stats.tags.imported}，跳过 ${stats.tags.skipped}，失败 ${stats.tags.errors}`,
+          serviceTags: `导入 ${stats.serviceTags.imported}，跳过 ${stats.serviceTags.skipped}，失败 ${stats.serviceTags.errors}`,
           debugApis: `导入 ${stats.debugApis.imported}，跳过 ${stats.debugApis.skipped}，失败 ${stats.debugApis.errors}`
         }
       }

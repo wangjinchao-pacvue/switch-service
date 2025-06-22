@@ -358,8 +358,8 @@ export const useAppStore = defineStore('app', {
       }
     },
 
-    // 导入配置
-    async importConfig(file) {
+    // 预览导入配置
+    async previewImportConfig(file) {
       try {
         this.loading = true
         const text = await file.text()
@@ -370,7 +370,32 @@ export const useAppStore = defineStore('app', {
           throw new Error('无效的配置文件格式')
         }
         
-        const response = await axios.post('/api/config/import', importData)
+        const response = await axios.post('/api/config/import/preview', importData)
+        return response.data
+      } catch (error) {
+        console.error('Failed to preview import config:', error)
+        throw error
+      } finally {
+        this.loading = false
+      }
+    },
+
+    // 导入配置
+    async importConfig(file, options = {}) {
+      try {
+        this.loading = true
+        const text = await file.text()
+        const importData = JSON.parse(text)
+        
+        // 验证文件格式
+        if (!importData.data || !importData.version) {
+          throw new Error('无效的配置文件格式')
+        }
+        
+        const response = await axios.post('/api/config/import', { 
+          importData, 
+          options 
+        })
         
         if (response.data.success) {
           // 刷新数据

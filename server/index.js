@@ -880,12 +880,135 @@ app.get('/api/config/export', async (req, res) => {
   }
 })
 
-// 导入配置数据
-app.post('/api/config/import', async (req, res) => {
+// 预览导入配置数据（检查冲突）
+app.post('/api/config/import/preview', async (req, res) => {
   try {
     const importData = req.body
     
-    console.log('开始导入配置数据')
+    console.log('开始预览导入配置数据')
+    
+    // 检查是否有服务正在运行
+    const runningServices = await database.getAllProxyServices()
+    const runningCount = runningServices.filter(service => service.isRunning).length
+    
+    if (runningCount > 0) {
+      const runningServiceNames = runningServices
+        .filter(service => service.isRunning)
+        .map(service => service.serviceName)
+        .slice(0, 5)
+        .join('、')
+      
+      return res.status(400).json({ 
+        success: false, 
+        error: `检测到有 ${runningCount} 个服务正在运行（${runningServiceNames}${runningCount > 5 ? ' 等' : ''}），为了确保数据安全，请先停止所有运行中的服务再进行导入配置操作。`,
+        runningCount: runningCount,
+        runningServices: runningServices.filter(service => service.isRunning).map(s => s.serviceName)
+      })
+    }
+    
+    // 验证导入数据格式
+    if (!importData.data || !importData.version) {
+      return res.status(400).json({ 
+        success: false, 
+        error: '无效的配置文件格式' 
+      })
+    }
+    
+    const { proxyServices, tags, serviceTags, debugApis } = importData.data
+    
+    // 获取现有数据
+    const [existingServices, existingTags, existingDebugApis] = await Promise.all([
+      database.getAllProxyServices(),
+      database.getAllTags(),
+      database.getDebugApis()
+    ])
+    
+    // 分析冲突
+    const conflicts = {
+      services: [],
+      tags: [],
+      debugApis: []
+    }
+    
+    const newItems = {
+      services: [],
+      tags: [],
+      debugApis: []
+    }
+    
+    // 检查服务冲突
+    if (proxyServices && Array.isArray(proxyServices)) {
+      const existingServiceNames = new Set(existingServices.map(s => s.serviceName))
+      
+      proxyServices.forEach(service => {
+        if (existingServiceNames.has(service.serviceName)) {
+          conflicts.services.push({
+            name: service.serviceName,
+            existing: existingServices.find(s => s.serviceName === service.serviceName),
+            importing: service
+          })
+        } else {
+          newItems.services.push(service)
+        }
+      })
+    }
+    
+    // 检查标签冲突
+    if (tags && Array.isArray(tags)) {
+      const existingTagNames = new Set(existingTags.map(t => t.name))
+      
+      tags.forEach(tag => {
+        if (existingTagNames.has(tag.name)) {
+          conflicts.tags.push({
+            name: tag.name,
+            existing: existingTags.find(t => t.name === tag.name),
+            importing: tag
+          })
+        } else {
+          newItems.tags.push(tag)
+        }
+      })
+    }
+    
+    // 检查API调试配置冲突
+    if (debugApis && typeof debugApis === 'object') {
+      Object.entries(debugApis).forEach(([serviceName, apis]) => {
+        if (existingDebugApis[serviceName] && existingDebugApis[serviceName].length > 0) {
+          conflicts.debugApis.push({
+            serviceName,
+            existing: existingDebugApis[serviceName],
+            importing: apis
+          })
+        } else {
+          newItems.debugApis.push({ serviceName, apis })
+        }
+      })
+    }
+    
+    res.json({
+      success: true,
+      conflicts,
+      newItems,
+      summary: {
+        totalConflicts: conflicts.services.length + conflicts.tags.length + conflicts.debugApis.length,
+        totalNew: newItems.services.length + newItems.tags.length + newItems.debugApis.length,
+        hasConflicts: conflicts.services.length > 0 || conflicts.tags.length > 0 || conflicts.debugApis.length > 0
+      }
+    })
+    
+  } catch (error) {
+    console.error('预览导入配置失败:', error)
+    res.status(500).json({ success: false, error: error.message })
+  }
+})
+
+// 导入配置数据
+app.post('/api/config/import', async (req, res) => {
+  try {
+    const { importData, options = {} } = req.body
+    const { conflictResolution = 'skip' } = options // 'skip' | 'replace'
+    
+    console.log('开始导入配置数据，冲突处理策略:', conflictResolution)
     
     // 检查是否有服务正在运行
     const runningServices = await database.getAllProxyServices()
@@ -918,10 +1041,10 @@ app.post('/api/config/import', async (req, res) => {
     
     // 统计信息
     const stats = {
-      services: { imported: 0, skipped: 0, errors: 0 },
-      tags: { imported: 0, skipped: 0, errors: 0 },
+      services: { imported: 0, skipped: 0, replaced: 0, errors: 0 },
+      tags: { imported: 0, skipped: 0, replaced: 0, errors: 0 },
       serviceTags: { imported: 0, skipped: 0, errors: 0 },
-      debugApis: { imported: 0, skipped: 0, errors: 0 }
+      debugApis: { imported: 0, skipped: 0, replaced: 0, errors: 0 }
     }
     
     // 导入标签数据
@@ -938,6 +1061,14 @@ app.post('/api/config/import', async (req, res) => {
             // 添加到已存在集合中，避免重复导入
             existingTagNames.add(tag.name)
             console.log(`导入标签: ${tag.name}`)
+          } else if (conflictResolution === 'replace') {
+            // 替换现有标签
+            const existingTag = existingTags.find(t => t.name === tag.name)
+            if (existingTag) {
+              await database.updateTag(existingTag.id, tag)
+              stats.tags.replaced++
+              console.log(`替换标签: ${tag.name}`)
+            }
           } else {
             console.log(`跳过标签: ${tag.name}（已存在）`)
             stats.tags.skipped++
@@ -973,9 +1104,28 @@ app.post('/api/config/import', async (req, res) => {
             // 建立服务名称到新ID的映射
             serviceNameToIdMap.set(service.serviceName, newService.id || service.serviceName)
             console.log(`导入服务: ${service.serviceName}`)
+          } else if (conflictResolution === 'replace') {
+            // 替换现有服务（保持原有ID和端口）
+            const existingService = existingServices.find(s => s.serviceName === service.serviceName)
+            if (existingService) {
+              // 只更新配置，保持运行状态、端口等
+              const updates = {
+                targets: service.targets,
+                activeTarget: service.activeTarget
+              }
+              await database.updateProxyService(existingService.id, updates)
+              stats.services.replaced++
+              serviceNameToIdMap.set(service.serviceName, existingService.id)
+              console.log(`替换服务: ${service.serviceName}`)
+            }
           } else {
             console.log(`跳过服务: ${service.serviceName}（已存在）`)
             stats.services.skipped++
+            // 即使跳过也要建立映射，用于后续的标签关联
+            const existingService = existingServices.find(s => s.serviceName === service.serviceName)
+            if (existingService) {
+              serviceNameToIdMap.set(service.serviceName, existingService.id)
+            }
           }
         } catch (error) {
           console.error(`导入服务失败: ${service.serviceName}`, error)
@@ -1057,9 +1207,17 @@ app.post('/api/config/import', async (req, res) => {
           
           // 检查该服务是否已经有API调试配置
           if (existingDebugApis[serviceName] && existingDebugApis[serviceName].length > 0) {
-            console.log(`跳过服务 ${serviceName} 的API调试配置：已存在 ${existingDebugApis[serviceName].length} 个接口`)
-            stats.debugApis.skipped++
-            continue
+            if (conflictResolution === 'replace') {
+              // 替换现有的API调试配置
+              await database.saveDebugApis(serviceName, apis)
+              stats.debugApis.replaced++
+              console.log(`替换服务 ${serviceName} 的API调试配置，共 ${apis.length} 个接口`)
+              continue
+            } else {
+              console.log(`跳过服务 ${serviceName} 的API调试配置：已存在 ${existingDebugApis[serviceName].length} 个接口`)
+              stats.debugApis.skipped++
+              continue
+            }
           }
           
           if (Array.isArray(apis) && apis.length > 0) {
@@ -1087,6 +1245,7 @@ app.post('/api/config/import', async (req, res) => {
     
     // 生成详细的导入报告
     const totalImported = stats.services.imported + stats.tags.imported + stats.serviceTags.imported + stats.debugApis.imported
+    const totalReplaced = stats.services.replaced + stats.tags.replaced + stats.debugApis.replaced
     const totalSkipped = stats.services.skipped + stats.tags.skipped + stats.serviceTags.skipped + stats.debugApis.skipped
     const totalErrors = stats.services.errors + stats.tags.errors + stats.serviceTags.errors + stats.debugApis.errors
     
@@ -1094,11 +1253,14 @@ app.post('/api/config/import', async (req, res) => {
     if (totalImported > 0) {
       message += `，成功导入 ${totalImported} 项`
     }
+    if (totalReplaced > 0) {
+      message += `，替换 ${totalReplaced} 项`
+    }
     if (totalSkipped > 0) {
-      message += `，跳过 ${totalSkipped} 项已存在的数据`
+      message += `，跳过 ${totalSkipped} 项`
     }
     if (totalErrors > 0) {
-      message += `，${totalErrors} 项导入失败`
+      message += `，${totalErrors} 项失败`
     }
     
     res.json({ 
@@ -1107,13 +1269,14 @@ app.post('/api/config/import', async (req, res) => {
       stats: stats,
       summary: {
         totalImported,
+        totalReplaced,
         totalSkipped, 
         totalErrors,
         details: {
-          services: `导入 ${stats.services.imported}，跳过 ${stats.services.skipped}，失败 ${stats.services.errors}`,
-          tags: `导入 ${stats.tags.imported}，跳过 ${stats.tags.skipped}，失败 ${stats.tags.errors}`,
+          services: `导入 ${stats.services.imported}，替换 ${stats.services.replaced}，跳过 ${stats.services.skipped}，失败 ${stats.services.errors}`,
+          tags: `导入 ${stats.tags.imported}，替换 ${stats.tags.replaced}，跳过 ${stats.tags.skipped}，失败 ${stats.tags.errors}`,
           serviceTags: `导入 ${stats.serviceTags.imported}，跳过 ${stats.serviceTags.skipped}，失败 ${stats.serviceTags.errors}`,
-          debugApis: `导入 ${stats.debugApis.imported}，跳过 ${stats.debugApis.skipped}，失败 ${stats.debugApis.errors}`
+          debugApis: `导入 ${stats.debugApis.imported}，替换 ${stats.debugApis.replaced}，跳过 ${stats.debugApis.skipped}，失败 ${stats.debugApis.errors}`
         }
       }
     })

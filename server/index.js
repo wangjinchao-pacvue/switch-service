@@ -3420,7 +3420,7 @@ const clientDistPath = path.join(__dirname, '../client/dist');
 app.use(express.static(clientDistPath));
 
 // 前端路由 history fallback
-app.get(/^\/(?!api|ws).*/, (req, res) => {
+app.get(/^\/(?!api\/|ws\/).*/, (req, res) => {
   res.sendFile(path.join(clientDistPath, 'index.html'));
 });
 

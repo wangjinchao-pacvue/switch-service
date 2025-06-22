@@ -1,108 +1,32 @@
 import { createApp } from 'vue'
 import { createPinia } from 'pinia'
-import ElementPlus from 'element-plus'
-import 'element-plus/dist/index.css'
+// 使用Naive UI
+import naive from 'naive-ui'
+// 添加Naive UI的通用样式
+import 'vfonts/Lato.css'
+import 'vfonts/FiraCode.css'
 import App from './App.vue'
 import router from './router'
 import { useAppStore } from './stores/app'
 import JsonViewer from 'vue-json-viewer'
 import 'vue-json-viewer/style.css'
 
-// 按需导入需要的图标
-import {
-  Search,
-  Management,
-  Plus,
-  Delete,
-  Edit,
-  View,
-  Refresh,
-  Download,
-  Upload,
-  Setting,
-  InfoFilled,
-  SuccessFilled,
-  WarningFilled,
-  CircleCloseFilled,
-  Moon,
-  Sunny,
-  CopyDocument,
-  Close,
-  Check,
-  ArrowRight,
-  ArrowLeft,
-  More,
-  DocumentCopy,
-  Connection,
-  Monitor,
-  DataLine,
-  Tools,
-  Link,
-  Switch,
-  Timer,
-  Warning,
-  CircleCheck,
-  CircleClose,
-  Document,
-  List,
-  Location,
-  ArrowDown,
-  ArrowUp
-} from '@element-plus/icons-vue'
+// Monaco Editor
+import { install as VueMonacoEditorPlugin } from '@guolao/vue-monaco-editor'
 
 const app = createApp(App)
-
-// 注册需要的图标
-const icons = {
-  Search,
-  Management,
-  Plus,
-  Delete,
-  Edit,
-  View,
-  Refresh,
-  Download,
-  Upload,
-  Setting,
-  InfoFilled,
-  SuccessFilled,
-  WarningFilled,
-  CircleCloseFilled,
-  Moon,
-  Sunny,
-  CopyDocument,
-  Close,
-  Check,
-  ArrowRight,
-  ArrowLeft,
-  More,
-  DocumentCopy,
-  Connection,
-  Monitor,
-  DataLine,
-  Tools,
-  Link,
-  Switch,
-  Timer,
-  Warning,
-  CircleCheck,
-  CircleClose,
-  Document,
-  List,
-  Location,
-  ArrowDown,
-  ArrowUp
-}
-
-for (const [key, component] of Object.entries(icons)) {
-  app.component(key, component)
-}
 
 const pinia = createPinia()
 app.use(pinia)
 app.use(router)
-app.use(ElementPlus)
+app.use(naive) // 使用Naive UI
 app.use(JsonViewer)
+app.use(VueMonacoEditorPlugin, {
+  paths: {
+    // CDN 路径
+    vs: 'https://cdn.jsdelivr.net/npm/monaco-editor@0.43.0/min/vs'
+  }
+})
 
 // 初始化主题
 const appStore = useAppStore()

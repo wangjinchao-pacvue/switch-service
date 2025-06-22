@@ -1,0 +1,330 @@
+{
+  "version": "1.2.0",
+  "exportTime": "2024-03-22T02:58:21.460Z",
+  "data": {
+    "proxyServices": [
+      {
+        "id": "0ff57b12-5e76-4bf8-96b3-f01f0b07a82a",
+        "serviceName": "amazon-advertising-api-dev",
+        "port": 4000,
+        "targets": {
+          "测试环境": "https://api-test.pacvue.com/amazon-advertising-api-dev"
+        },
+        "activeTarget": "测试环境"
+      },
+      {
+        "id": "d021d469-317e-46d5-ac66-50e0fc302248", 
+        "serviceName": "tag-service",
+        "port": 4001,
+        "targets": {
+          "测试环境": "https://api-test.pacvue.com/tag-service-dev"
+        },
+        "activeTarget": "测试环境"
+      },
+      {
+        "id": "14a1230a-278e-453c-b8ea-fa3b7857fb5f",
+        "serviceName": "bolv2-provider-test",
+        "port": 4002,
+        "targets": {
+          "测试环境": "https://api-test.pacvue.com/bolv2-provider-test"
+        },
+        "activeTarget": "测试环境"
+      },
+      {
+        "id": "18c9f71e-f91e-4dc3-924a-0e79cd84052a",
+        "serviceName": "samsclub-provider-test",
+        "port": 4003,
+        "targets": {
+          "test": "https://api-test.pacvue.com/samsclub-provider-test"
+        },
+        "activeTarget": "test"
+      },
+      {
+        "id": "32027f82-8e2d-46ba-a64d-89fa33a40c6f",
+        "serviceName": "kroger-provider-test",
+        "port": 4004,
+        "targets": {
+          "test": "https://api-test.pacvue.com/kroger-provider-test"
+        },
+        "activeTarget": "test"
+      },
+      {
+        "id": "49d36332-f69c-4d7c-bcab-48f113441db8",
+        "serviceName": "citrus-provider-test",
+        "port": 4005,
+        "targets": {
+          "测试环境": "https://api-test.pacvue.com/citrus-provider-test"
+        },
+        "activeTarget": "测试环境"
+      },
+      {
+        "id": "56d37d66-4bd0-47aa-b654-a818a052b762",
+        "serviceName": "tag-service-dev",
+        "port": 4006,
+        "targets": {
+          "测试环境": "https://api-test.pacvue.com/tag-service-dev"
+        },
+        "activeTarget": "测试环境"
+      },
+      {
+        "id": "758ddf1b-e642-4b08-8178-4a13742c72ba",
+        "serviceName": "criteo-provider-test",
+        "port": 4007,
+        "targets": {
+          "测试环境": "https://api-test.pacvue.com/criteo-provider-test"
+        },
+        "activeTarget": "测试环境"
+      },
+      {
+        "id": "7684494d-2410-4b30-99f9-cd2ec05a75f8",
+        "serviceName": "walmart-provider-test",
+        "port": 4008,
+        "targets": {
+          "测试环境": "https://api-test.pacvue.com/walmart-provider-test"
+        },
+        "activeTarget": "测试环境"
+      },
+      {
+        "id": "89539d3b-c8b3-4c02-ac60-cc86ee309ff9",
+        "serviceName": "kroger-provider",
+        "port": 4009,
+        "targets": {
+          "测试环境": "https://api-test.pacvue.com/kroger-provider-test"
+        },
+        "activeTarget": "测试环境"
+      },
+      {
+        "id": "bd9a0716-38dc-40b8-a2c7-773facac307d",
+        "serviceName": "dspapi",
+        "port": 4010,
+        "targets": {
+          "test": "https://api-test.pacvue.com/dspapi-dev"
+        },
+        "activeTarget": "test"
+      },
+      {
+        "id": "beadc011-9148-4e8c-b565-537ccba1a7e8",
+        "serviceName": "doordash-provider-test",
+        "port": 4011,
+        "targets": {
+          "test": "https://api-test.pacvue.com/doordash-provider-test"
+        },
+        "activeTarget": "test"
+      },
+      {
+        "id": "c14e9d94-71a1-4a5d-9013-fec1fefe8a6a",
+        "serviceName": "chewyv2-provider",
+        "port": 4012,
+        "targets": {
+          "测试环境": "https://api-test.pacvue.com/chewyv2-provider-test"
+        },
+        "activeTarget": "测试环境"
+      },
+      {
+        "id": "e8164def-8a0d-4c79-ad8b-a7b84c055e96",
+        "serviceName": "target-provider-test",
+        "port": 4013,
+        "targets": {
+          "测试环境": "https://api-test.pacvue.com/target-provider-test"
+        },
+        "activeTarget": "测试环境"
+      },
+      {
+        "id": "f01f0b07-a82a-4155-b6b6-45b04c5fafd2",
+        "serviceName": "amazon-provider-test",
+        "port": 4014,
+        "targets": {
+          "test": "https://api-test.pacvue.com/amazon-provider-test"
+        },
+        "activeTarget": "test"
+      },
+      {
+        "id": "f02f0b07-a82a-4155-b6b6-45b04c5fafd2",
+        "serviceName": "admin-meta-api",
+        "port": 4015,
+        "targets": {
+          "test": "https://api-test.pacvue.com/admin-meta-api-test",
+          "eu": "https://api-eu.pacvue.com/admin-meta-api",
+          "us": "https://api.pacvue.com/admin-meta-api"
+        },
+        "activeTarget": "test"
+      },
+      {
+        "id": "f03f0b07-a82a-4155-b6b6-45b04c5fafd2",
+        "serviceName": "instacart-provider-test",
+        "port": 4016,
+        "targets": {
+          "test": "https://api-test.pacvue.com/instacart-provider-test"
+        },
+        "activeTarget": "test"
+      }
+    ],
+    "tags": [
+      {
+        "id": "3f0a774f-6782-4155-b6b6-45b04c5fafd2",
+        "name": "platform-api",
+        "color": "#18a058",
+        "type": "success",
+        "description": "",
+        "createdAt": "2024-03-22 17:02:06"
+      },
+      {
+        "id": "52a03ba0-1d9e-49bc-acc4-9cfe60b36f1a",
+        "name": "provider",
+        "color": "#2080f0",
+        "type": "primary",
+        "description": "",
+        "createdAt": "2024-03-22 16:58:53"
+      }
+    ],
+    "serviceTags": [
+      {
+        "service_id": "f02f0b07-a82a-4155-b6b6-45b04c5fafd2",
+        "tag_id": "3f0a774f-6782-4155-b6b6-45b04c5fafd2"
+      },
+      {
+        "service_id": "0ff57b12-5e76-4bf8-96b3-f01f0b07a82a",
+        "tag_id": "3f0a774f-6782-4155-b6b6-45b04c5fafd2"
+      },
+      {
+        "service_id": "f01f0b07-a82a-4155-b6b6-45b04c5fafd2",
+        "tag_id": "3f0a774f-6782-4155-b6b6-45b04c5fafd2"
+      },
+      {
+        "service_id": "f01f0b07-a82a-4155-b6b6-45b04c5fafd2",
+        "tag_id": "52a03ba0-1d9e-49bc-acc4-9cfe60b36f1a"
+      },
+      {
+        "service_id": "14a1230a-278e-453c-b8ea-fa3b7857fb5f",
+        "tag_id": "3f0a774f-6782-4155-b6b6-45b04c5fafd2"
+      },
+      {
+        "service_id": "14a1230a-278e-453c-b8ea-fa3b7857fb5f",
+        "tag_id": "52a03ba0-1d9e-49bc-acc4-9cfe60b36f1a"
+      },
+      {
+        "service_id": "c14e9d94-71a1-4a5d-9013-fec1fefe8a6a",
+        "tag_id": "3f0a774f-6782-4155-b6b6-45b04c5fafd2"
+      },
+      {
+        "service_id": "c14e9d94-71a1-4a5d-9013-fec1fefe8a6a",
+        "tag_id": "52a03ba0-1d9e-49bc-acc4-9cfe60b36f1a"
+      },
+      {
+        "service_id": "49d36332-f69c-4d7c-bcab-48f113441db8",
+        "tag_id": "3f0a774f-6782-4155-b6b6-45b04c5fafd2"
+      },
+      {
+        "service_id": "49d36332-f69c-4d7c-bcab-48f113441db8",
+        "tag_id": "52a03ba0-1d9e-49bc-acc4-9cfe60b36f1a"
+      },
+      {
+        "service_id": "758ddf1b-e642-4b08-8178-4a13742c72ba",
+        "tag_id": "3f0a774f-6782-4155-b6b6-45b04c5fafd2"
+      },
+      {
+        "service_id": "758ddf1b-e642-4b08-8178-4a13742c72ba",
+        "tag_id": "52a03ba0-1d9e-49bc-acc4-9cfe60b36f1a"
+      },
+      {
+        "service_id": "beadc011-9148-4e8c-b565-537ccba1a7e8",
+        "tag_id": "3f0a774f-6782-4155-b6b6-45b04c5fafd2"
+      },
+      {
+        "service_id": "beadc011-9148-4e8c-b565-537ccba1a7e8",
+        "tag_id": "52a03ba0-1d9e-49bc-acc4-9cfe60b36f1a"
+      },
+      {
+        "service_id": "f03f0b07-a82a-4155-b6b6-45b04c5fafd2",
+        "tag_id": "3f0a774f-6782-4155-b6b6-45b04c5fafd2"
+      },
+      {
+        "service_id": "f03f0b07-a82a-4155-b6b6-45b04c5fafd2",
+        "tag_id": "52a03ba0-1d9e-49bc-acc4-9cfe60b36f1a"
+      },
+      {
+        "service_id": "89539d3b-c8b3-4c02-ac60-cc86ee309ff9",
+        "tag_id": "3f0a774f-6782-4155-b6b6-45b04c5fafd2"
+      },
+      {
+        "service_id": "89539d3b-c8b3-4c02-ac60-cc86ee309ff9",
+        "tag_id": "52a03ba0-1d9e-49bc-acc4-9cfe60b36f1a"
+      },
+      {
+        "service_id": "32027f82-8e2d-46ba-a64d-89fa33a40c6f",
+        "tag_id": "3f0a774f-6782-4155-b6b6-45b04c5fafd2"
+      },
+      {
+        "service_id": "32027f82-8e2d-46ba-a64d-89fa33a40c6f",
+        "tag_id": "52a03ba0-1d9e-49bc-acc4-9cfe60b36f1a"
+      },
+      {
+        "service_id": "18c9f71e-f91e-4dc3-924a-0e79cd84052a",
+        "tag_id": "3f0a774f-6782-4155-b6b6-45b04c5fafd2"
+      },
+      {
+        "service_id": "18c9f71e-f91e-4dc3-924a-0e79cd84052a",
+        "tag_id": "52a03ba0-1d9e-49bc-acc4-9cfe60b36f1a"
+      },
+      {
+        "service_id": "e8164def-8a0d-4c79-ad8b-a7b84c055e96",
+        "tag_id": "3f0a774f-6782-4155-b6b6-45b04c5fafd2"
+      },
+      {
+        "service_id": "e8164def-8a0d-4c79-ad8b-a7b84c055e96",
+        "tag_id": "52a03ba0-1d9e-49bc-acc4-9cfe60b36f1a"
+      },
+      {
+        "service_id": "7684494d-2410-4b30-99f9-cd2ec05a75f8",
+        "tag_id": "3f0a774f-6782-4155-b6b6-45b04c5fafd2"
+      },
+      {
+        "service_id": "7684494d-2410-4b30-99f9-cd2ec05a75f8",
+        "tag_id": "52a03ba0-1d9e-49bc-acc4-9cfe60b36f1a"
+      }
+    ],
+    "debugApis": {
+      "amazon-provider-test": [
+        {
+          "id": 1750496136901,
+          "name": "获取profile列表",
+          "method": "POST",
+          "path": "customDashboard/getProfileInfoList",
+          "headers": [
+            {
+              "key": "Content-Type",
+              "value": "application/json",
+              "valueType": "custom"
+            },
+            {
+              "key": "Accept",
+              "value": "application/json",
+              "valueType": "custom"
+            },
+            {
+              "key": "Authorization",
+              "value": "token",
+              "valueType": "variable"
+            },
+            {
+              "key": "",
+              "value": "",
+              "valueType": "custom"
+            }
+          ],
+          "params": [],
+          "body": "{\n    \"userId\": \"16465\",\n    \"productLine\": \"amazon\",\n    \"advertiserIds\": [\n        \"amzn1.account.AE4ZBSST4E4NUPEYNF2KWVXBX55A\",\n        \"amzn1.account.AE5BGIOF2TI3YJTF4UA56VLCSOIA\",\n        \"amzn1.account.AEAGQB73R2XAMHW2FIUXFWDXQ4SQ\",\n        \"amzn1.account.AECO64NXQW2VUKNARGFAZ7PWUYSQ\",\n        \"amzn1.account.AEDY4TSE6MWNBU3FXW444FJF2BLA\",\n        \"amzn1.account.AEFY5T6A5SC2CWW53JI2POQKMKLQ\",\n        \"amzn1.account.AEGH4P7FBRMCUVTXCNZNQXMSYTVQ\",\n        \"amzn1.account.AEIIW4IY3DZWKS65V5P3E5VMMQNQ\",\n        \"amzn1.account.AEJS4H4DFEX2KTA6BIOVDKDCHGSA\",\n        \"amzn1.account.AEL5Y4MR5XGYJUMM77RNISO56V2A\",\n        \"amzn1.account.AEZ3227GL6CSOGMQIFAEQY2HIADQ\",\n        \"amzn1.account.AEZWAJLEJWGBUAYDN6E3QCONUIIQ\",\n        \"amzn1.account.AF37LG37BRV63JVADHFFQW5J5HDQ\",\n        \"amzn1.account.AF4TNMHEUG5TRXUFYAM54IT3JY5Q\",\n        \"amzn1.account.AF4VTLDEH6LHKSN72R3ZBRAMRMWQ\",\n        \"amzn1.account.AF5NZUDD3DD7BY64KYQANEKAC57A\",\n        \"amzn1.account.AFALBBOGKDAX36DKNMM3YZBTWVIA\",\n        \"amzn1.account.AFCQE7R3YX4ZC5THUM2SZ7LFAFWQ\",\n        \"amzn1.account.AFE5W3DNDAF2RNHM3EM5OAVB3U2A\",\n        \"amzn1.account.AFFIYWXLIOVS7ZLB65LHDEUFN5QQ\",\n        \"amzn1.account.AFIEK5E2NI4LMF7SX7CIOWYMUM2A\",\n        \"amzn1.account.AFJOKJF4IP5KV5GZBSL3P3OPKLUA\",\n        \"amzn1.account.AFLVAEDWWV7B3K4KQCLVUEANYUWA\",\n        \"amzn1.account.AFO3RQGO5UT5CF2OTOZU5TRHN4CQ\",\n        \"amzn1.account.AFQ7CX46C53RKAZDMRXBV2IQ4TJA\",\n        \"amzn1.account.AFQKGLSVDILP6DDQRD3J7FCCP5WQ\",\n        \"amzn1.account.AFRBS3P5HJCVZPI4NXRV7IIBATMQ\",\n        \"amzn1.account.AFTN6XHLYZO4V54KHXONCPCMOJNA\",\n        \"amzn1.account.AFUBNNKDGTEVSK477YMOD4GKTCDQ\",\n        \"amzn1.account.AFW44WQSQBUGQWCGTLGDPT743JAA\",\n        \"amzn1.account.AFWF6LZTXUVQ7MODWEELUUYNGJ7A\",\n        \"amzn1.account.AFWJUBS2BQLIDERZWNMJDCFTRTLA\",\n        \"amzn1.account.AFXVYYWUPVLGZCH7JGWOZ7AITAUA\",\n        \"amzn1.account.AG6DBNZMF3BIIC5MIRFEZH7NFEIA\",\n        \"amzn1.account.AGAYDGCGX7SDK56VDC66F7EG4BEA\",\n        \"amzn1.account.AGAYYD76ER5KLB72M6DSE7SMHBKA\",\n        \"amzn1.account.AGCN4NDLZKMEKV5KHNAY4CKS63TQ\",\n        \"amzn1.account.AGEM4JRCWGE4J6QJ2MW6BAN6HYUQ\",\n        \"amzn1.account.AGTUK2LEICZMA2IJAZ2WUBCDSPNA\",\n        \"amzn1.account.AGWAU7OW4RLEDULIYWLOZ3DCACCQ\",\n        \"amzn1.account.AGWSGQB722RNM5NZZGH2GQAB25YQ\",\n        \"amzn1.account.AGXQBHGRHAQVTVHXWHFLYQJNTXWA\",\n        \"amzn1.account.AGXZQDMZ3AXGAFXXW7Y67HWIFGYQ\",\n        \"amzn1.account.AH4CSAXZJWERJ56MT3KTGQOCQCKQ\",\n        \"amzn1.account.AH4IM5IBB6GOQHUXYFXHMKSVDWHA\",\n        \"amzn1.account.AHCF475EL2MXTZ4FII63SX7S4TBA\",\n        \"amzn1.account.AHCG75VVU43547GQGMLB46B6JY4Q\",\n        \"amzn1.account.AHH2ZYYN3O556NJQHUSRHU5PWE4Q\",\n        \"amzn1.account.AHICULLPNI3YLTKJUI7DJ7REUYZQ\",\n        \"amzn1.account.AHJO5J2VVNEX3DQ2C3SUW4D6UWQQ\",\n        \"amzn1.account.AHJTO3U3GIVQSDOPP6L2P3R4D4SQ\",\n        \"amzn1.account.AHKET3DQBXROZVMEXU5Z3PHAXLKQ\",\n        \"amzn1.account.AHOCKP42RK7JB4EUC4WP5Z3IMVEQ\",\n        \"amzn1.account.AHQEKQXC4QUTAHDOATDARUELBSIQ\",\n        \"amzn1.account.AHVSESXSP53J7JTRZAIL2PR7R7YA\",\n        \"amzn1.account.AHXULN5AVUWGYI2DHJX4HOKBPHVA\"\n    ]\n}"
+        }
+      ]
+    }
+  },
+  "excludedConfigs": [
+    "eurekaConfig",
+    "localIPConfig",
+    "autoStartConfig",
+    "portRangeConfig",
+    "ports",
+    "runningStatus"
+  ],
+  "description": "此配置文件包含代理服务配置、标签、服务标签关联关系和API调试配置，不包含端口、IP、运行状态等运行时配置"
+} 

@@ -874,7 +874,7 @@
           v-model:show="showCreateDialog" 
           preset="dialog"
           title="创建代理服务"
-          style="width: 600px;"
+          style="width: 700px;"
         >
           <n-form
             :model="createServiceForm"
@@ -887,36 +887,84 @@
                 placeholder="请输入服务名称"
               />
             </n-form-item>
-            <n-form-item label="目标地址" required>
-              <n-input 
-                v-model:value="createServiceForm.targetUrl" 
-                placeholder="http://localhost:8080"
-              />
+            
+            <n-form-item label="目标配置">
+              <div style="width: 100%;">
+                <div v-if="Object.keys(createServiceForm.targets).length === 0" style="color: #999; margin-bottom: 12px;">
+                  请添加至少一个目标配置
+                </div>
+                <div v-for="(url, name) in createServiceForm.targets" :key="name" style="display: flex; align-items: center; margin-bottom: 8px;">
+                  <n-input 
+                    :value="name" 
+                    readonly 
+                    style="width: 120px; margin-right: 8px;" 
+                    size="small"
+                    placeholder="目标名称"
+                  />
+                  <n-input 
+                    :value="url" 
+                    readonly 
+                    style="flex: 1; margin-right: 8px;" 
+                    size="small"
+                    placeholder="目标地址"
+                  />
+                  <n-button 
+                    type="error" 
+                    size="small" 
+                    @click="removeCreateTarget(name)"
+                  >
+                    删除
+                  </n-button>
+                </div>
+                
+                <!-- 添加新目标 -->
+                <n-divider style="margin: 16px 0;">{{ Object.keys(createServiceForm.targets).length === 0 ? '添加目标' : '添加新目标' }}</n-divider>
+                <div style="display: flex; align-items: center; gap: 8px;">
+                  <n-input 
+                    v-model:value="createServiceForm.newTargetName"
+                    placeholder="目标名称（如：default、dev、test）"
+                    style="width: 140px;"
+                    size="small"
+                  />
+                  <n-input 
+                    v-model:value="createServiceForm.newTargetUrl"
+                    placeholder="目标地址，如: http://localhost:8080"
+                    style="flex: 1;"
+                    size="small"
+                    @keyup.enter="addCreateTarget"
+                  />
+                  <n-button 
+                    type="primary" 
+                    size="small" 
+                    @click="addCreateTarget"
+                    :disabled="!createServiceForm.newTargetName.trim() || !createServiceForm.newTargetUrl.trim()"
+                  >
+                    添加
+                  </n-button>
+                </div>
+              </div>
             </n-form-item>
-            <n-form-item label="本地端口">
-              <n-input-number 
-                v-model:value="createServiceForm.localPort" 
-                :min="1"
-                :max="65535"
-                placeholder="自动分配"
-                style="width: 100%"
-              />
-            </n-form-item>
+            
+
             <n-form-item label="描述">
               <n-input 
                 v-model:value="createServiceForm.description" 
                 type="textarea"
                 placeholder="可选的服务描述"
+                :rows="3"
+                maxlength="200"
+                show-count
               />
             </n-form-item>
           </n-form>
           
           <template #action>
-            <n-button @click="showCreateDialog = false">取消</n-button>
+            <n-button @click="cancelCreateService">取消</n-button>
             <n-button 
               type="primary" 
               @click="createService"
               :loading="appStore.loading"
+              :disabled="Object.keys(createServiceForm.targets).length === 0"
             >
               创建
             </n-button>
@@ -1793,8 +1841,10 @@ const tagTypePresets = [
 const createServiceForm = reactive({
   serviceName: '',
   targetUrl: '',
-  localPort: null,
-  description: ''
+  description: '',
+  targets: {},
+  newTargetName: '',
+  newTargetUrl: ''
 })
 
 // 编辑服务表单
@@ -3542,17 +3592,19 @@ const createService = async () => {
     return
   }
   
-  if (!createServiceForm.targetUrl.trim()) {
-    message.warning('请输入目标地址')
+  if (Object.keys(createServiceForm.targets).length === 0) {
+    message.warning('请至少添加一个目标配置')
     return
   }
   
   try {
+    // 使用第一个目标作为默认激活目标
+    const targetNames = Object.keys(createServiceForm.targets)
     const serviceData = {
       serviceName: createServiceForm.serviceName.trim(),
-      targetUrl: createServiceForm.targetUrl.trim(),
-      localPort: createServiceForm.localPort || null,
-      description: createServiceForm.description.trim() || null
+      targets: createServiceForm.targets,
+      activeTarget: targetNames[0], // 默认激活第一个目标
+      tags: [] // 暂时不支持在创建时添加标签，可以后续编辑添加
     }
     
     await appStore.createProxyService(serviceData)
@@ -3561,8 +3613,10 @@ const createService = async () => {
     Object.assign(createServiceForm, {
       serviceName: '',
       targetUrl: '',
-      localPort: null,
-      description: ''
+      description: '',
+      targets: {},
+      newTargetName: '',
+      newTargetUrl: ''
     })
     
     showCreateDialog.value = false
@@ -4429,6 +4483,54 @@ const handleWebSocketMessage = async (messageData) => {
     default:
       console.log('未处理的WebSocket消息类型:', messageData.type)
   }
+}
+
+const removeCreateTarget = (targetName) => {
+  if (createServiceForm.targets[targetName]) {
+    delete createServiceForm.targets[targetName]
+    message.success('目标已删除')
+  }
+}
+
+const addCreateTarget = () => {
+  const name = createServiceForm.newTargetName.trim()
+  const url = createServiceForm.newTargetUrl.trim()
+  
+  if (!name || !url) {
+    message.warning('请输入目标名称和地址')
+    return
+  }
+  
+  if (createServiceForm.targets[name]) {
+    message.warning('目标名称已存在')
+    return
+  }
+  
+  // 简单的URL格式验证
+  if (!url.startsWith('http://') && !url.startsWith('https://')) {
+    message.warning('目标地址必须以 http:// 或 https:// 开头')
+    return
+  }
+  
+  createServiceForm.targets[name] = url
+  createServiceForm.newTargetName = ''
+  createServiceForm.newTargetUrl = ''
+  
+  message.success('目标已添加')
+}
+
+const cancelCreateService = () => {
+  showCreateDialog.value = false
+  
+  // 重置表单
+  Object.assign(createServiceForm, {
+    serviceName: '',
+    targetUrl: '',
+    description: '',
+    targets: {},
+    newTargetName: '',
+    newTargetUrl: ''
+  })
 }
 </script>
 

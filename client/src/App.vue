@@ -2,7 +2,8 @@
   <div id="app">
     <n-config-provider :theme="themeConfig" :theme-overrides="themeOverrides">
       <n-message-provider>
-        <n-layout class="app-layout" has-sider>
+        <n-dialog-provider>
+          <n-layout class="app-layout" has-sider>
           <!-- 左侧导航栏 -->
           <n-layout-sider 
             bordered 
@@ -118,6 +119,7 @@
             </n-layout-content>
           </n-layout>
         </n-layout>
+        </n-dialog-provider>
       </n-message-provider>
     </n-config-provider>
   </div>
@@ -128,7 +130,7 @@ import { ref, computed, onMounted, h } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { useAppStore } from './stores/app'
 import { 
-  NConfigProvider, NMessageProvider, NLayout, NLayoutSider, NLayoutHeader, 
+  NConfigProvider, NMessageProvider, NDialogProvider, NLayout, NLayoutSider, NLayoutHeader, 
   NLayoutContent, NMenu, NButton, NTooltip, NIcon, NButtonGroup, darkTheme
 } from 'naive-ui'
 import { SettingsOutline, MoonOutline, SunnyOutline, LocationOutline, DownloadOutline, CloudUploadOutline } from '@vicons/ionicons5'

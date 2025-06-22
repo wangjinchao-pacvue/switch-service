@@ -14,13 +14,13 @@ class Database {
       // 确保data目录存在
       const fs = require('fs');
       const dataDir = path.dirname(DB_PATH);
-      
+
       try {
         if (!fs.existsSync(dataDir)) {
           console.log('创建数据目录:', dataDir);
           fs.mkdirSync(dataDir, { recursive: true });
         }
-        
+
         // 检查目录权限
         try {
           fs.accessSync(dataDir, fs.constants.W_OK);
@@ -67,7 +67,6 @@ class Database {
           targets TEXT NOT NULL,
           active_target TEXT NOT NULL,
           is_running INTEGER DEFAULT 0,
-          tags TEXT DEFAULT '[]',
           created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
           updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
         )
@@ -78,6 +77,7 @@ class Database {
           id TEXT PRIMARY KEY,
           name TEXT UNIQUE NOT NULL,
           color TEXT DEFAULT '#409eff',
+          type TEXT DEFAULT 'default',
           description TEXT,
           created_at DATETIME DEFAULT CURRENT_TIMESTAMP
         )
@@ -153,71 +153,55 @@ class Database {
           return;
         }
 
-        // 检查并添加 tags 列（如果不存在）
-        this.db.run('ALTER TABLE proxy_services ADD COLUMN tags TEXT DEFAULT \'[]\'', (alterErr) => {
-          // 忽略列已存在的错误
-          if (alterErr && !alterErr.message.includes('duplicate column name')) {
-            console.error('添加tags列失败:', alterErr);
+        // 然后创建 tags 表
+        this.db.run(createTagsTable, (tagErr) => {
+          if (tagErr) {
+            console.error('创建tags表失败:', tagErr);
+            reject(tagErr);
+            return;
           }
 
-          // 然后创建 tags 表
-          this.db.run(createTagsTable, (tagErr) => {
-            if (tagErr) {
-              console.error('创建tags表失败:', tagErr);
-              reject(tagErr);
+          // 创建 system_config 表
+          this.db.run(createSystemConfigTable, (configErr) => {
+            if (configErr) {
+              console.error('创建system_config表失败:', configErr);
+              reject(configErr);
               return;
             }
 
-            // 检查并添加 type 列到 tags 表（如果不存在）
-            this.db.run('ALTER TABLE tags ADD COLUMN type TEXT DEFAULT \'default\'', (alterTagErr) => {
-              // 忽略列已存在的错误
-              if (alterTagErr && !alterTagErr.message.includes('duplicate column name')) {
-                console.error('添加tags表type列失败:', alterTagErr);
-              }
-            });
-
-            // 创建 system_config 表
-            this.db.run(createSystemConfigTable, (configErr) => {
-              if (configErr) {
-                console.error('创建system_config表失败:', configErr);
-                reject(configErr);
+            // 创建 heartbeat_history 表
+            this.db.run(createHeartbeatHistoryTable, (heartbeatErr) => {
+              if (heartbeatErr) {
+                console.error('创建heartbeat_history表失败:', heartbeatErr);
+                reject(heartbeatErr);
                 return;
               }
 
-              // 创建 heartbeat_history 表
-              this.db.run(createHeartbeatHistoryTable, (heartbeatErr) => {
-                if (heartbeatErr) {
-                  console.error('创建heartbeat_history表失败:', heartbeatErr);
-                  reject(heartbeatErr);
-                  return;
-                }
-
-                // 最后创建 proxy_logs 表
-                this.db.run(createProxyLogsTable, (logErr) => {
-                  if (logErr) {
-                    console.error('创建proxy_logs表失败:', logErr);
-                    reject(logErr);
-                                      } else {
-                      // 创建debug_apis表
-                      this.db.run(createDebugApisTable, (debugErr) => {
-                        if (debugErr) {
-                          console.error('创建debug_apis表失败:', debugErr);
-                          reject(debugErr);
+              // 创建 proxy_logs 表
+              this.db.run(createProxyLogsTable, (logErr) => {
+                if (logErr) {
+                  console.error('创建proxy_logs表失败:', logErr);
+                  reject(logErr);
+                } else {
+                  // 创建debug_apis表
+                  this.db.run(createDebugApisTable, (debugErr) => {
+                    if (debugErr) {
+                      console.error('创建debug_apis表失败:', debugErr);
+                      reject(debugErr);
+                    } else {
+                      // 创建service_tags表
+                      this.db.run(createServiceTagsTable, (serviceTagsErr) => {
+                        if (serviceTagsErr) {
+                          console.error('创建service_tags表失败:', serviceTagsErr);
+                          reject(serviceTagsErr);
                         } else {
-                          // 创建service_tags表
-                          this.db.run(createServiceTagsTable, (serviceTagsErr) => {
-                            if (serviceTagsErr) {
-                              console.error('创建service_tags表失败:', serviceTagsErr);
-                              reject(serviceTagsErr);
-                            } else {
-                              console.log('数据库表初始化完成');
-                              resolve();
-                            }
-                          });
+                          console.log('数据库表初始化完成');
+                          resolve();
                         }
                       });
                     }
-                });
+                  });
+                }
               });
             });
           });
@@ -239,7 +223,7 @@ class Database {
         GROUP BY ps.id
         ORDER BY ps.created_at DESC
       `;
-      
+
       this.db.all(sql, (err, rows) => {
         if (err) {
           reject(err);
@@ -263,33 +247,32 @@ class Database {
 
   // 创建代理服务
   async createProxyService(serviceConfig) {
-    const id = uuidv4();
-    const { serviceName, port, targets, activeTarget, tags = [] } = serviceConfig;
-    
+    const { id = uuidv4(), serviceName, port, targets, activeTarget, tags = [] } = serviceConfig;
+
     return new Promise((resolve, reject) => {
       // 开始事务
       this.db.serialize(() => {
         this.db.run('BEGIN TRANSACTION');
-        
+
         // 插入服务（不再需要tags字段）
         const serviceSql = `
           INSERT INTO proxy_services (id, service_name, port, targets, active_target, is_running)
           VALUES (?, ?, ?, ?, ?, 0)
         `;
-        
+
         this.db.run(serviceSql, [id, serviceName, port, JSON.stringify(targets), activeTarget], (err) => {
           if (err) {
             this.db.run('ROLLBACK');
             reject(err);
             return;
           }
-          
+
           // 如果有标签，插入标签关系
           if (tags.length > 0) {
             const tagSql = 'INSERT INTO service_tags (service_id, tag_id) VALUES (?, ?)';
             let completed = 0;
             let hasError = false;
-            
+
             tags.forEach(tagId => {
               this.db.run(tagSql, [id, tagId], (tagErr) => {
                 if (tagErr && !hasError) {
@@ -298,7 +281,7 @@ class Database {
                   reject(tagErr);
                   return;
                 }
-                
+
                 completed++;
                 if (completed === tags.length) {
                   this.db.run('COMMIT');
@@ -320,26 +303,26 @@ class Database {
     return new Promise((resolve, reject) => {
       this.db.serialize(() => {
         this.db.run('BEGIN TRANSACTION');
-        
+
         // 处理非标签字段的更新
         const fields = [];
         const values = [];
-        
+
         if (updates.targets !== undefined) {
           fields.push('targets = ?');
           values.push(JSON.stringify(updates.targets));
         }
-        
+
         if (updates.activeTarget !== undefined) {
           fields.push('active_target = ?');
           values.push(updates.activeTarget);
         }
-        
+
         if (updates.isRunning !== undefined) {
           fields.push('is_running = ?');
           values.push(updates.isRunning ? 1 : 0);
         }
-        
+
         if (updates.port !== undefined) {
           fields.push('port = ?');
           values.push(updates.port);
@@ -357,7 +340,7 @@ class Database {
               reject(err);
               return;
             }
-            
+
             this.updateServiceTags(id, updates.tags, resolve, reject);
           });
         } else {
@@ -418,7 +401,7 @@ class Database {
   // 删除代理服务
   async deleteProxyService(id) {
     return new Promise((resolve, reject) => {
-      this.db.run('DELETE FROM proxy_services WHERE id = ?', [id], function(err) {
+      this.db.run('DELETE FROM proxy_services WHERE id = ?', [id], function (err) {
         if (err) {
           reject(err);
         } else {
@@ -440,7 +423,7 @@ class Database {
         WHERE ps.id = ?
         GROUP BY ps.id
       `;
-      
+
       this.db.get(sql, [id], (err, row) => {
         if (err) {
           reject(err);
@@ -475,7 +458,7 @@ class Database {
         WHERE ps.service_name = ?
         GROUP BY ps.id
       `;
-      
+
       this.db.get(sql, [serviceName], (err, row) => {
         if (err) {
           reject(err);
@@ -525,14 +508,14 @@ class Database {
   async createTag(tagData) {
     const id = uuidv4();
     const { name, color = '#409eff', type = 'default', description = '' } = tagData;
-    
+
     return new Promise((resolve, reject) => {
       const sql = `
         INSERT INTO tags (id, name, color, type, description)
         VALUES (?, ?, ?, ?, ?)
       `;
-      
-      this.db.run(sql, [id, name, color, type, description], function(err) {
+
+      this.db.run(sql, [id, name, color, type, description], function (err) {
         if (err) {
           reject(err);
         } else {
@@ -546,22 +529,22 @@ class Database {
   async updateTag(id, updates) {
     const fields = [];
     const values = [];
-    
+
     if (updates.name !== undefined) {
       fields.push('name = ?');
       values.push(updates.name);
     }
-    
+
     if (updates.color !== undefined) {
       fields.push('color = ?');
       values.push(updates.color);
     }
-    
+
     if (updates.type !== undefined) {
       fields.push('type = ?');
       values.push(updates.type);
     }
-    
+
     if (updates.description !== undefined) {
       fields.push('description = ?');
       values.push(updates.description);
@@ -571,8 +554,8 @@ class Database {
 
     return new Promise((resolve, reject) => {
       const sql = `UPDATE tags SET ${fields.join(', ')} WHERE id = ?`;
-      
-      this.db.run(sql, values, function(err) {
+
+      this.db.run(sql, values, function (err) {
         if (err) {
           reject(err);
         } else {
@@ -585,7 +568,7 @@ class Database {
   // 删除标签
   async deleteTag(id) {
     return new Promise((resolve, reject) => {
-      this.db.run('DELETE FROM tags WHERE id = ?', [id], function(err) {
+      this.db.run('DELETE FROM tags WHERE id = ?', [id], function (err) {
         if (err) {
           reject(err);
         } else {
@@ -616,7 +599,7 @@ class Database {
         GROUP BY ps.id
         ORDER BY ps.created_at DESC
       `;
-      
+
       this.db.all(sql, tagIds, (err, rows) => {
         if (err) {
           reject(err);
@@ -643,7 +626,7 @@ class Database {
     return new Promise((resolve, reject) => {
       this.db.serialize(() => {
         this.db.run('BEGIN TRANSACTION');
-        
+
         let addedRelations = 0;
         let totalOperations = 0;
         let completedOperations = 0;
@@ -651,11 +634,11 @@ class Database {
 
         // 计算需要插入的关系
         const insertPromises = [];
-        
+
         serviceIds.forEach(serviceId => {
           tagIds.forEach(tagId => {
             totalOperations++;
-            
+
             // 检查关系是否已存在
             const checkSql = 'SELECT 1 FROM service_tags WHERE service_id = ? AND tag_id = ?';
             this.db.get(checkSql, [serviceId, tagId], (checkErr, existingRow) => {
@@ -734,8 +717,8 @@ class Database {
       this.createAutoStartTableIfNotExists().then(() => {
         const serviceIdsStr = JSON.stringify(serviceIds || []);
         const sql = 'UPDATE auto_start_config SET service_ids = ?, updated_at = CURRENT_TIMESTAMP WHERE id = 1';
-        
-        this.db.run(sql, [serviceIdsStr], function(err) {
+
+        this.db.run(sql, [serviceIdsStr], function (err) {
           if (err) {
             reject(err);
           } else {
@@ -814,13 +797,13 @@ class Database {
   async setConfig(configKey, configValue) {
     return new Promise((resolve, reject) => {
       const value = typeof configValue === 'object' ? JSON.stringify(configValue) : configValue;
-      
+
       const sql = `
         INSERT OR REPLACE INTO system_config (config_key, config_value, updated_at)
         VALUES (?, ?, CURRENT_TIMESTAMP)
       `;
-      
-      this.db.run(sql, [configKey, value], function(err) {
+
+      this.db.run(sql, [configKey, value], function (err) {
         if (err) {
           reject(err);
         } else {
@@ -870,11 +853,11 @@ class Database {
         INSERT INTO heartbeat_history (service_name, port, status, message, created_at)
         VALUES (?, ?, ?, ?, ?)
       `;
-      
+
       // 使用秒级时间戳
       const timestamp = Math.floor(Date.now() / 1000);
-      
-      this.db.run(sql, [serviceName, port, status, message, timestamp], function(err) {
+
+      this.db.run(sql, [serviceName, port, status, message, timestamp], function (err) {
         if (err) {
           reject(err);
         } else {
@@ -893,7 +876,7 @@ class Database {
         ORDER BY created_at DESC 
         LIMIT ?
       `;
-      
+
       this.db.all(sql, [serviceName, port, limit], (err, rows) => {
         if (err) {
           reject(err);
@@ -916,8 +899,8 @@ class Database {
   async clearHeartbeatHistory(serviceName, port) {
     return new Promise((resolve, reject) => {
       const sql = 'DELETE FROM heartbeat_history WHERE service_name = ? AND port = ?';
-      
-      this.db.run(sql, [serviceName, port], function(err) {
+
+      this.db.run(sql, [serviceName, port], function (err) {
         if (err) {
           reject(err);
         } else {
@@ -938,8 +921,8 @@ class Database {
           LIMIT ?
         )
       `;
-      
-      this.db.run(sql, [keepRecords], function(err) {
+
+      this.db.run(sql, [keepRecords], function (err) {
         if (err) {
           reject(err);
         } else {
@@ -960,7 +943,7 @@ class Database {
           request_headers, request_body, response_headers, response_body, error
         ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       `;
-      
+
       const values = [
         serviceName,
         logData.timestamp,
@@ -975,8 +958,8 @@ class Database {
         JSON.stringify(logData.responseBody || {}),
         logData.error
       ];
-      
-      this.db.run(sql, values, function(err) {
+
+      this.db.run(sql, values, function (err) {
         if (err) {
           reject(err);
         } else {
@@ -995,7 +978,7 @@ class Database {
         ORDER BY created_at DESC 
         LIMIT ?
       `;
-      
+
       this.db.all(sql, [serviceName, limit], (err, rows) => {
         if (err) {
           reject(err);
@@ -1026,8 +1009,8 @@ class Database {
   async clearServiceLogs(serviceName) {
     return new Promise((resolve, reject) => {
       const sql = 'DELETE FROM proxy_logs WHERE service_name = ?';
-      
-      this.db.run(sql, [serviceName], function(err) {
+
+      this.db.run(sql, [serviceName], function (err) {
         if (err) {
           reject(err);
         } else {
@@ -1044,7 +1027,7 @@ class Database {
         SELECT * FROM proxy_logs 
         WHERE service_name = ? AND id = ?
       `;
-      
+
       this.db.get(sql, [serviceName, logId], (err, row) => {
         if (err) {
           reject(err);
@@ -1084,8 +1067,8 @@ class Database {
           LIMIT ?
         )
       `;
-      
-      this.db.run(sql, [keepRecords], function(err) {
+
+      this.db.run(sql, [keepRecords], function (err) {
         if (err) {
           reject(err);
         } else {
@@ -1134,7 +1117,7 @@ class Database {
           }
 
           const usedPorts = new Set(rows.map(row => row.port));
-          
+
           // 从起始端口开始查找可用端口
           for (let port = startPort; port <= endPort; port++) {
             if (!usedPorts.has(port)) {
@@ -1142,7 +1125,7 @@ class Database {
               return;
             }
           }
-          
+
           // 如果所有端口都被占用，返回错误
           reject(new Error(`所有端口(${startPort}-${endPort})都已被占用，请释放一些端口或调整端口范围配置`));
         });
@@ -1197,7 +1180,7 @@ class Database {
 
           const usedPorts = rows.map(row => row.port);
           const availablePorts = [];
-          
+
           for (let port = startPort; port <= endPort; port++) {
             if (!usedPorts.includes(port)) {
               availablePorts.push(port);
@@ -1228,7 +1211,7 @@ class Database {
           reject(err);
           return;
         }
-        
+
         const result = {};
         if (rows && rows.length > 0) {
           rows.forEach(row => {
@@ -1238,7 +1221,7 @@ class Database {
             result[row.service_name] = JSON.parse(row.api_data);
           });
         }
-        
+
         resolve(result);
       });
     });
@@ -1252,7 +1235,7 @@ class Database {
           reject(err);
           return;
         }
-        
+
         // 如果有接口数据，则插入新记录
         if (apis && apis.length > 0) {
           this.db.run(`
@@ -1282,11 +1265,11 @@ class Database {
           reject(err);
           return;
         }
-        
+
         if (row) {
           const apis = JSON.parse(row.api_data);
           const filteredApis = apis.filter(api => api.id !== apiId);
-          
+
           if (filteredApis.length === 0) {
             // 如果没有接口了，删除整个记录
             this.db.run('DELETE FROM debug_apis WHERE service_name = ?', [serviceName], (deleteErr) => {

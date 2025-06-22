@@ -43,52 +43,6 @@
                   <h2>{{ currentPageTitle }}</h2>
                 </div>
                 <div class="header-actions">
-                  <!-- 导入导出按钮组 -->
-                  <n-tooltip>
-                    <template #trigger>
-                      <n-button 
-                        text
-                        @click="exportConfig"
-                        :loading="appStore.loading"
-                        size="large"
-                      >
-                        <template #icon>
-                          <n-icon size="18"><DownloadIcon /></n-icon>
-                        </template>
-                      </n-button>
-                    </template>
-                    导出配置文件
-                  </n-tooltip>
-                  
-                  <n-tooltip 
-                    :disabled="!hasRunningServices"
-                  >
-                    <template #trigger>
-                      <n-button 
-                        text
-                        @click="triggerImport"
-                        :loading="appStore.loading"
-                        :disabled="hasRunningServices"
-                        size="large"
-                      >
-                        <template #icon>
-                          <n-icon size="18"><UploadIcon /></n-icon>
-                        </template>
-                      </n-button>
-                    </template>
-                    {{ hasRunningServices ? `有 ${runningServicesCount} 个服务正在运行，需要先停止所有服务` : '导入配置文件' }}
-                  </n-tooltip>
-
-                  <!-- 隐藏的文件输入 -->
-                  <input 
-                    ref="fileInputRef" 
-                    type="file" 
-                    accept=".json" 
-                    @change="handleFileImport" 
-                    style="display: none;" 
-                  />
-
-
                   <!-- 主题切换按钮 -->
                   <n-tooltip :delay="500">
                     <template #trigger>
@@ -107,8 +61,6 @@
                     </template>
                     {{ appStore.theme === 'light' ? '切换到暗色模式' : '切换到亮色模式' }}
                   </n-tooltip>
-
-
                 </div>
               </div>
             </n-layout-header>
@@ -133,15 +85,13 @@ import {
   NConfigProvider, NMessageProvider, NDialogProvider, NLayout, NLayoutSider, NLayoutHeader, 
   NLayoutContent, NMenu, NButton, NTooltip, NIcon, NButtonGroup, darkTheme
 } from 'naive-ui'
-import { SettingsOutline, MoonOutline, SunnyOutline, LocationOutline, DownloadOutline, CloudUploadOutline } from '@vicons/ionicons5'
+import { SettingsOutline, MoonOutline, SunnyOutline, LocationOutline } from '@vicons/ionicons5'
 
 // 创建图标组件
 const SettingIcon = () => h(SettingsOutline)
 const MoonIcon = () => h(MoonOutline)
 const SunnyIcon = () => h(SunnyOutline)
 const PositionIcon = () => h(LocationOutline)
-const DownloadIcon = () => h(DownloadOutline)
-const UploadIcon = () => h(CloudUploadOutline)
 
 const appStore = useAppStore()
 const route = useRoute()
@@ -150,7 +100,6 @@ const router = useRouter()
 // 响应式数据
 const collapsed = ref(false)
 const activeMenu = ref('service-management')
-const fileInputRef = ref(null)
 
 // 主题配置
 const isDark = computed(() => appStore.isDark)
@@ -285,152 +234,7 @@ const handleMenuSelect = (key) => {
   }
 }
 
-// 导入导出功能
-const exportConfig = async () => {
-  try {
-    await appStore.exportConfig()
-  } catch (error) {
-    console.error('导出配置失败:', error)
-  }
-}
 
-const triggerImport = () => {
-  if (hasRunningServices.value) {
-    return
-  }
-  fileInputRef.value?.click()
-}
-
-const handleFileImport = async (event) => {
-  const file = event.target.files[0]
-  if (!file) return
-  
-  try {
-    // 先预览导入，检查冲突
-    const previewResult = await appStore.previewImportConfig(file)
-    
-    if (!previewResult.success) {
-      window.$message?.error(previewResult.error || '预览导入失败')
-      event.target.value = ''
-      return
-    }
-    
-    const { summary, conflicts, newItems } = previewResult
-    
-    // 如果没有冲突，直接导入
-    if (!summary.hasConflicts) {
-      const result = await appStore.importConfig(file, { conflictResolution: 'skip' })
-      showImportResult(result)
-      event.target.value = ''
-      return
-    }
-    
-    // 显示冲突处理对话框
-    showConflictDialog(file, conflicts, newItems, summary)
-    event.target.value = ''
-    
-  } catch (error) {
-    console.error('导入配置失败:', error)
-    let errorMessage = '导入配置失败'
-    
-    if (error.message) {
-      errorMessage += `：${error.message}`
-    }
-    
-    window.$message?.error(errorMessage)
-    event.target.value = ''
-  }
-}
-
-const showImportResult = (result) => {
-  if (result.success) {
-    // 显示成功消息和详细统计
-    const { summary } = result
-    let message = result.message || '配置导入完成'
-    
-    if (summary && (summary.totalImported > 0 || summary.totalReplaced > 0)) {
-      message += `\n\n详细统计：`
-      if (summary.details.services && !summary.details.services.includes('导入 0，替换 0，跳过 0，失败 0')) {
-        message += `\n• 服务：${summary.details.services}`
-      }
-      if (summary.details.tags && !summary.details.tags.includes('导入 0，替换 0，跳过 0，失败 0')) {
-        message += `\n• 标签：${summary.details.tags}`
-      }
-      if (summary.details.serviceTags && !summary.details.serviceTags.includes('导入 0，跳过 0，失败 0')) {
-        message += `\n• 服务标签关联：${summary.details.serviceTags}`
-      }
-      if (summary.details.debugApis && !summary.details.debugApis.includes('导入 0，替换 0，跳过 0，失败 0')) {
-        message += `\n• API调试配置：${summary.details.debugApis}`
-      }
-    }
-    
-    window.$message?.success(message)
-  } else {
-    window.$message?.error(result.message || '导入配置失败')
-  }
-}
-
-const showConflictDialog = (file, conflicts, newItems, summary) => {
-  // 构建冲突信息
-  let conflictMessage = `发现 ${summary.totalConflicts} 项数据冲突，${summary.totalNew} 项新数据。\n\n`
-  
-  if (conflicts.services.length > 0) {
-    conflictMessage += `服务冲突 (${conflicts.services.length}项)：\n`
-    conflicts.services.forEach(conflict => {
-      conflictMessage += `• ${conflict.name}\n`
-    })
-    conflictMessage += '\n'
-  }
-  
-  if (conflicts.tags.length > 0) {
-    conflictMessage += `标签冲突 (${conflicts.tags.length}项)：\n`
-    conflicts.tags.forEach(conflict => {
-      conflictMessage += `• ${conflict.name}\n`
-    })
-    conflictMessage += '\n'
-  }
-  
-  if (conflicts.debugApis.length > 0) {
-    conflictMessage += `API调试配置冲突 (${conflicts.debugApis.length}项)：\n`
-    conflicts.debugApis.forEach(conflict => {
-      conflictMessage += `• ${conflict.serviceName}\n`
-    })
-  }
-  
-  conflictMessage += '\n请选择冲突处理方式：'
-  
-  window.$dialog?.warning({
-    title: '导入冲突处理',
-    content: conflictMessage,
-    positiveText: '替换现有数据',
-    negativeText: '跳过冲突项',
-    onPositiveClick: async () => {
-      try {
-        const result = await appStore.importConfig(file, { conflictResolution: 'replace' })
-        showImportResult(result)
-      } catch (error) {
-        window.$message?.error(`导入失败：${error.message}`)
-      }
-    },
-    onNegativeClick: async () => {
-      try {
-        const result = await appStore.importConfig(file, { conflictResolution: 'skip' })
-        showImportResult(result)
-      } catch (error) {
-        window.$message?.error(`导入失败：${error.message}`)
-      }
-    }
-  })
-}
-
-// 计算属性：是否有运行中的服务
-const hasRunningServices = computed(() => {
-  return appStore.proxyServices?.some(service => service.isRunning) || false
-})
-
-const runningServicesCount = computed(() => {
-  return appStore.proxyServices?.filter(service => service.isRunning).length || 0
-})
 
 onMounted(async () => {
   // 根据当前路由设置激活菜单

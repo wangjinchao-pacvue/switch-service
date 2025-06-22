@@ -498,6 +498,53 @@
                 
                 <!-- 主要操作区域 -->
                 <div class="main-actions">
+                  <!-- 导入导出按钮组 -->
+                  <n-button-group size="medium">
+                    <n-tooltip>
+                      <template #trigger>
+                        <n-button 
+                          secondary
+                          @click="exportConfig"
+                          :loading="appStore.loading"
+                        >
+                          <template #icon>
+                            <n-icon><DownloadOutline /></n-icon>
+                          </template>
+                          导出
+                        </n-button>
+                      </template>
+                      导出配置文件
+                    </n-tooltip>
+                    
+                    <n-tooltip 
+                      :disabled="!hasRunningServices"
+                    >
+                      <template #trigger>
+                        <n-button 
+                          secondary
+                          @click="triggerImport"
+                          :loading="appStore.loading"
+                          :disabled="hasRunningServices"
+                        >
+                          <template #icon>
+                            <n-icon><CloudUploadOutline /></n-icon>
+                          </template>
+                          导入
+                        </n-button>
+                      </template>
+                      {{ hasRunningServices ? `有 ${runningServicesCount} 个服务正在运行，需要先停止所有服务` : '导入配置文件' }}
+                    </n-tooltip>
+                  </n-button-group>
+
+                  <!-- 隐藏的文件输入 -->
+                  <input 
+                    ref="fileInputRef" 
+                    type="file" 
+                    accept=".json" 
+                    @change="handleFileImport" 
+                    style="display: none;" 
+                  />
+                  
                   <n-button type="primary" size="medium" @click="showCreateDialog = true">
                     <template #icon>
                       <n-icon><AddOutline /></n-icon>
@@ -3308,124 +3355,121 @@ const handleFileImport = async (event) => {
   if (!file) return
   
   try {
-    const text = await file.text()
-    const importData = JSON.parse(text)
+    // 先预览导入，检查冲突
+    const previewResult = await appStore.previewImportConfig(file)
     
-    // 验证文件格式
-    if (!importData.data || !importData.version) {
-      message.error('无效的配置文件格式')
+    if (!previewResult.success) {
+      message.error(previewResult.error || '预览导入失败')
+      event.target.value = ''
       return
     }
     
-    // 构建导入信息显示
-    const importInfo = [
-      `• 版本：${importData.version}`,
-      `• 导出时间：${new Date(importData.exportTime).toLocaleString()}`,
-      `• 代理服务：${importData.data.proxyServices?.length || 0} 个`,
-      `• 标签：${importData.data.tags?.length || 0} 个`,
-      `• API调试配置：${Object.keys(importData.data.debugApis || {}).length} 个服务`
-    ]
+    const { summary, conflicts, newItems } = previewResult
     
-    if (importData.excludedConfigs && importData.excludedConfigs.length > 0) {
-      importInfo.push(`\n已排除配置：${importData.excludedConfigs.join('、')}`)
+    // 如果没有冲突，直接导入
+    if (!summary.hasConflicts) {
+      const result = await appStore.importConfig(file, { conflictResolution: 'skip' })
+      showImportResult(result)
+      event.target.value = ''
+      return
     }
     
-    // 显示确认对话框
-    dialog.warning({
-      title: '确认导入配置',
-      content: `确定要导入配置吗？\n\n导入信息：\n${importInfo.join('\n')}\n\n注意：重复的服务和标签将被跳过`,
-      positiveText: '确定导入',
-      negativeText: '取消',
-      onPositiveClick: async () => {
-        await importConfig(importData)
-      }
-    })
+    // 显示冲突处理对话框
+    showConflictDialog(file, conflicts, newItems, summary)
+    event.target.value = ''
+    
   } catch (error) {
-    message.error('文件格式错误')
+    console.error('导入配置失败:', error)
+    let errorMessage = '导入配置失败'
+    
+    if (error.message) {
+      errorMessage += `：${error.message}`
+    }
+    
+    message.error(errorMessage)
+    event.target.value = ''
   }
-  
-  // 清空文件输入
-  event.target.value = ''
 }
 
-const importConfig = async (importData) => {
-  try {
-    const response = await fetch('/api/config/import', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(importData)
-    })
+const showImportResult = (result) => {
+  if (result.success) {
+    // 显示成功消息和详细统计
+    const { summary } = result
+    let messageText = result.message || '配置导入完成'
     
-    const result = await response.json()
-    
-    if (result.success) {
-      // 刷新数据
-      await Promise.all([
-        appStore.fetchProxyServices(),
-        fetchTags()
-      ])
-      
-      // 显示详细的导入结果
-      const stats = result.stats
-      const summary = result.summary
-      const messages = []
-      
-      // 添加总体统计
-      if (summary.totalImported > 0) {
-        messages.push(`✅ 总计成功导入：${summary.totalImported} 项`)
+    if (summary && (summary.totalImported > 0 || summary.totalReplaced > 0)) {
+      messageText += `\n\n详细统计：`
+      if (summary.details.services && !summary.details.services.includes('导入 0，替换 0，跳过 0，失败 0')) {
+        messageText += `\n• 服务：${summary.details.services}`
       }
-      if (summary.totalSkipped > 0) {
-        messages.push(`⏭️ 总计跳过：${summary.totalSkipped} 项（已存在）`)
+      if (summary.details.tags && !summary.details.tags.includes('导入 0，替换 0，跳过 0，失败 0')) {
+        messageText += `\n• 标签：${summary.details.tags}`
       }
-      if (summary.totalErrors > 0) {
-        messages.push(`❌ 总计失败：${summary.totalErrors} 项`)
+      if (summary.details.serviceTags && !summary.details.serviceTags.includes('导入 0，跳过 0，失败 0')) {
+        messageText += `\n• 服务标签关联：${summary.details.serviceTags}`
       }
-      
-      // 添加分类详情
-      if (summary.totalImported > 0 || summary.totalSkipped > 0 || summary.totalErrors > 0) {
-        messages.push('') // 空行分隔
-        messages.push('📊 详细统计：')
-        
-        if (stats.services.imported > 0 || stats.services.skipped > 0 || stats.services.errors > 0) {
-          messages.push(`   服务：${summary.details.services}`)
-        }
-        
-        if (stats.tags.imported > 0 || stats.tags.skipped > 0 || stats.tags.errors > 0) {
-          messages.push(`   标签：${summary.details.tags}`)
-        }
-        
-        if (stats.debugApis.imported > 0 || stats.debugApis.skipped > 0 || stats.debugApis.errors > 0) {
-          messages.push(`   API配置：${summary.details.debugApis}`)
-        }
+      if (summary.details.debugApis && !summary.details.debugApis.includes('导入 0，替换 0，跳过 0，失败 0')) {
+        messageText += `\n• API调试配置：${summary.details.debugApis}`
       }
-      
-      // 如果没有任何数据需要导入
-      if (summary.totalImported === 0 && summary.totalSkipped === 0 && summary.totalErrors === 0) {
-        messages.push('ℹ️ 配置文件中没有找到可导入的数据')
-      }
-      
-      const dialogType = summary.totalErrors > 0 ? 'warning' : 'success'
-      const title = summary.totalErrors > 0 ? '导入完成（有错误）' : '导入成功'
-      
-      if (dialogType === 'warning') {
-        dialog.warning({
-          title: title,
-          content: messages.join('\n'),
-          positiveText: '确定'
-        })
-      } else {
-        dialog.success({
-          title: title,
-          content: messages.join('\n'),
-          positiveText: '确定'
-        })
-      }
-    } else {
-      message.error(`导入失败: ${result.error}`)
     }
-  } catch (error) {
-    message.error(`导入失败: ${error.message}`)
+    
+    message.success(messageText)
+  } else {
+    message.error(result.message || '导入配置失败')
   }
+}
+
+const showConflictDialog = (file, conflicts, newItems, summary) => {
+  // 构建冲突信息
+  let conflictMessage = `发现 ${summary.totalConflicts} 项数据冲突，${summary.totalNew} 项新数据。\n\n`
+  
+  if (conflicts.services.length > 0) {
+    conflictMessage += `服务冲突 (${conflicts.services.length}项)：\n`
+    conflicts.services.forEach(conflict => {
+      conflictMessage += `• ${conflict.name}\n`
+    })
+    conflictMessage += '\n'
+  }
+  
+  if (conflicts.tags.length > 0) {
+    conflictMessage += `标签冲突 (${conflicts.tags.length}项)：\n`
+    conflicts.tags.forEach(conflict => {
+      conflictMessage += `• ${conflict.name}\n`
+    })
+    conflictMessage += '\n'
+  }
+  
+  if (conflicts.debugApis.length > 0) {
+    conflictMessage += `API调试配置冲突 (${conflicts.debugApis.length}项)：\n`
+    conflicts.debugApis.forEach(conflict => {
+      conflictMessage += `• ${conflict.serviceName}\n`
+    })
+  }
+  
+  conflictMessage += '\n请选择冲突处理方式：'
+  
+  dialog.warning({
+    title: '导入冲突处理',
+    content: conflictMessage,
+    positiveText: '替换现有数据',
+    negativeText: '跳过冲突项',
+    onPositiveClick: async () => {
+      try {
+        const result = await appStore.importConfig(file, { conflictResolution: 'replace' })
+        showImportResult(result)
+      } catch (error) {
+        message.error(`导入失败：${error.message}`)
+      }
+    },
+    onNegativeClick: async () => {
+      try {
+        const result = await appStore.importConfig(file, { conflictResolution: 'skip' })
+        showImportResult(result)
+      } catch (error) {
+        message.error(`导入失败：${error.message}`)
+      }
+    }
+  })
 }
 
 const removeServiceTag = async (serviceId, tag) => {
@@ -5949,6 +5993,78 @@ const handleWebSocketMessage = async (messageData) => {
     align-items: stretch;
     gap: 8px;
   }
+}
+
+/* 主要操作区域样式 */
+.main-actions {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+
+.main-actions .n-button-group {
+  flex-shrink: 0;
+}
+
+/* 导入导出按钮样式优化 */
+.main-actions .n-button-group .n-button {
+  transition: all 0.3s ease;
+}
+
+.main-actions .n-button-group .n-button:hover {
+  transform: translateY(-1px);
+}
+
+/* 控制区域样式 */
+.controls-section {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  padding: 20px;
+  background: var(--n-card-color);
+  border-radius: var(--n-border-radius);
+  border: 1px solid var(--n-border-color);
+  margin-bottom: 16px;
+}
+
+.controls-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  flex-wrap: wrap;
+}
+
+.search-row .search-group {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex: 1;
+  max-width: 600px;
+}
+
+.search-input {
+  min-width: 250px;
+  flex: 1;
+}
+
+.tag-select {
+  min-width: 200px;
+}
+
+.actions-row .batch-section {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  flex: 1;
+}
+
+.batch-buttons {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-left: 16px;
   
   .card-header {
     flex-direction: column;

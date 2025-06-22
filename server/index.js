@@ -829,12 +829,13 @@ app.get('/api/config/export', async (req, res) => {
       database.getDebugApis()
     ])
     
-    // 获取服务标签关联数据（包含服务名称）
+    // 获取服务标签关联数据（包含服务名称和标签名称）
     const serviceTagsQuery = `
-      SELECT st.service_id, st.tag_id, ps.service_name
+      SELECT st.service_id, st.tag_id, ps.service_name, t.name as tag_name
       FROM service_tags st
       JOIN proxy_services ps ON st.service_id = ps.id
-      ORDER BY ps.service_name, st.tag_id
+      JOIN tags t ON st.tag_id = t.id
+      ORDER BY ps.service_name, t.name
     `
     const serviceTags = await new Promise((resolve, reject) => {
       database.db.all(serviceTagsQuery, (err, rows) => {
@@ -1095,18 +1096,41 @@ app.post('/api/config/import', async (req, res) => {
       
       for (const service of proxyServices) {
         try {
+          const existingService = existingServices.find(s => s.serviceName === service.serviceName)
+          
           if (!existingServiceNames.has(service.serviceName)) {
-            // 创建新服务，让系统自动分配端口
-            const newService = await database.createProxyService(service)
+            // 创建新服务，需要分配端口
+            let availablePort
+            if (service.port && await database.isPortAvailable(service.port)) {
+              // 如果导入数据中有端口且可用，使用该端口
+              availablePort = service.port
+            } else {
+              // 否则获取可用端口
+              availablePort = await database.getAvailablePort()
+            }
+            
+            const serviceConfig = {
+              serviceName: service.serviceName,
+              port: availablePort,
+              targets: service.targets,
+              activeTarget: service.activeTarget,
+              tags: service.tags || []
+            }
+            
+            // 如果导入数据中有指定的ID，使用该ID
+            if (service.id) {
+              serviceConfig.id = service.id
+            }
+            
+            const newService = await database.createProxyService(serviceConfig)
             stats.services.imported++
             // 添加到已存在集合中，避免重复导入
             existingServiceNames.add(service.serviceName)
             // 建立服务名称到新ID的映射
-            serviceNameToIdMap.set(service.serviceName, newService.id || service.serviceName)
-            console.log(`导入服务: ${service.serviceName}`)
+            serviceNameToIdMap.set(service.serviceName, newService.id)
+            console.log(`导入服务: ${service.serviceName}，分配端口: ${availablePort}`)
           } else if (conflictResolution === 'replace') {
             // 替换现有服务（保持原有ID和端口）
-            const existingService = existingServices.find(s => s.serviceName === service.serviceName)
             if (existingService) {
               // 只更新配置，保持运行状态、端口等
               const updates = {
@@ -1116,13 +1140,12 @@ app.post('/api/config/import', async (req, res) => {
               await database.updateProxyService(existingService.id, updates)
               stats.services.replaced++
               serviceNameToIdMap.set(service.serviceName, existingService.id)
-              console.log(`替换服务: ${service.serviceName}`)
+              console.log(`替换服务: ${service.serviceName}，保持端口: ${existingService.port}`)
             }
           } else {
-            console.log(`跳过服务: ${service.serviceName}（已存在）`)
+            console.log(`跳过服务: ${service.serviceName}（已存在），保持端口: ${existingService?.port}`)
             stats.services.skipped++
             // 即使跳过也要建立映射，用于后续的标签关联
-            const existingService = existingServices.find(s => s.serviceName === service.serviceName)
             if (existingService) {
               serviceNameToIdMap.set(service.serviceName, existingService.id)
             }
@@ -1148,32 +1171,44 @@ app.post('/api/config/import', async (req, res) => {
         serviceNameToIdMap.set(service.serviceName, service.id)
       })
       
-      const tagIdMap = new Map(existingTags.map(tag => [tag.id, tag.id]))
+      // 构建标签名称到ID的映射
+      const tagNameToIdMap = new Map()
+      existingTags.forEach(tag => {
+        tagNameToIdMap.set(tag.name, tag.id)
+      })
       
       for (const relation of serviceTags) {
         try {
-          const { service_name: serviceName, tag_id: tagId } = relation
+          const { service_name: serviceName, tag_name: tagName } = relation
+          
+          // 检查是否有必要的字段
+          if (!serviceName || !tagName) {
+            console.log(`跳过服务标签关联: 缺少必要字段 service_name 或 tag_name`, relation)
+            stats.serviceTags.skipped++
+            continue
+          }
           
           // 通过服务名称找到当前的服务ID
           const currentServiceId = serviceNameToIdMap.get(serviceName)
-          
           if (!currentServiceId) {
             console.log(`跳过服务标签关联: 服务 ${serviceName} 不存在`)
             stats.serviceTags.skipped++
             continue
           }
           
-          if (!tagIdMap.has(tagId)) {
-            console.log(`跳过服务标签关联: 标签ID ${tagId} 不存在`)
+          // 通过标签名称找到当前的标签ID
+          const currentTagId = tagNameToIdMap.get(tagName)
+          if (!currentTagId) {
+            console.log(`跳过服务标签关联: 标签 ${tagName} 不存在`)
             stats.serviceTags.skipped++
             continue
           }
           
-          // 插入服务标签关联
+          // 插入服务标签关联（忽略重复）
           await new Promise((resolve, reject) => {
             database.db.run(
               'INSERT OR IGNORE INTO service_tags (service_id, tag_id) VALUES (?, ?)',
-              [currentServiceId, tagId],
+              [currentServiceId, currentTagId],
               function(err) {
                 if (err) reject(err)
                 else resolve()
@@ -1182,7 +1217,7 @@ app.post('/api/config/import', async (req, res) => {
           })
           
           stats.serviceTags.imported++
-          console.log(`导入服务标签关联: ${serviceName} -> 标签ID ${tagId}`)
+          console.log(`导入服务标签关联: ${serviceName} -> ${tagName}`)
         } catch (error) {
           console.error(`导入服务标签关联失败:`, relation, error)
           stats.serviceTags.errors++

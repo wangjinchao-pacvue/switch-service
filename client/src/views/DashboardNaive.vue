@@ -2264,8 +2264,8 @@ const resetEurekaConfig = () => {
   eurekaConfig.value = {
     host: 'localhost',
     port: 8761,
-    appName: 'switch-service',
-    instancePort: 3400
+    servicePath: '/eureka/apps',
+    heartbeatInterval: 10
   }
   message.info('配置已重置')
 }
@@ -2979,7 +2979,7 @@ const drawHeartbeatChart = () => {
   const timeWindow = 2 * 60 * 1000 // 2分钟
   const totalSeconds = timeWindow / 1000 // 总秒数
   const fiveSecondIntervals = totalSeconds / 5 // 5秒间隔数
-  const thirtySecondIntervals = totalSeconds / 30 // 30秒间隔数
+  const tenSecondIntervals = totalSeconds / 10 // 10秒间隔数（心跳间隔）
   
   // 绘制细网格（每5秒一条线）
   for (let i = 0; i <= fiveSecondIntervals; i++) {
@@ -2992,11 +2992,11 @@ const drawHeartbeatChart = () => {
     ctx.stroke()
   }
   
-  // 绘制粗网格（每30秒一条粗线）
+  // 绘制粗网格（每10秒一条粗线，对应心跳间隔）
   ctx.strokeStyle = '#e0e0e0'
   ctx.lineWidth = 1
-  for (let i = 0; i <= thirtySecondIntervals; i++) {
-    const x = (i / thirtySecondIntervals) * (width - 80) + 40
+  for (let i = 0; i <= tenSecondIntervals; i++) {
+    const x = (i / tenSecondIntervals) * (width - 80) + 40
     ctx.beginPath()
     ctx.moveTo(x, 20)
     ctx.lineTo(x, height - 40)
@@ -3021,14 +3021,14 @@ const drawHeartbeatChart = () => {
   ctx.lineTo(width - 40, baselineY)
   ctx.stroke()
   
-  // 绘制时间标签（每30秒一个标签）
+  // 绘制时间标签（每10秒一个标签）
   ctx.fillStyle = '#666'
   ctx.font = '10px Arial'
   ctx.textAlign = 'center'
   
-  for (let i = 0; i <= thirtySecondIntervals; i++) {
-    const x = (i / thirtySecondIntervals) * (width - 80) + 40
-    const secondsAgo = (thirtySecondIntervals - i) * 30
+  for (let i = 0; i <= tenSecondIntervals; i++) {
+    const x = (i / tenSecondIntervals) * (width - 80) + 40
+    const secondsAgo = (tenSecondIntervals - i) * 10
     let timeLabel
     if (secondsAgo === 0) {
       timeLabel = '现在'
@@ -4172,7 +4172,7 @@ onMounted(async () => {
       host: appStore.config.eureka.host || 'localhost',
       port: appStore.config.eureka.port || 8761,
       servicePath: appStore.config.eureka.servicePath || '/eureka/apps',
-      heartbeatInterval: appStore.config.eureka.heartbeatInterval || 30
+      heartbeatInterval: appStore.config.eureka.heartbeatInterval || 10
     }
   } else {
     // 默认配置
@@ -4180,7 +4180,7 @@ onMounted(async () => {
       host: 'localhost',
       port: 8761,
       servicePath: '/eureka/apps',
-      heartbeatInterval: 30
+      heartbeatInterval: 10
     }
   }
   

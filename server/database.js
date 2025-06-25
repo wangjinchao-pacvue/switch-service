@@ -145,6 +145,22 @@ class Database {
         )
       `;
 
+      const createServiceHealthStatusTable = `
+        CREATE TABLE IF NOT EXISTS service_health_status (
+          service_name TEXT NOT NULL,
+          port INTEGER NOT NULL,
+          consecutive_failures INTEGER DEFAULT 0,
+          last_success_time INTEGER,
+          restart_attempts INTEGER DEFAULT 0,
+          status TEXT DEFAULT 'healthy',
+          failure_rate REAL DEFAULT 0.0,
+          last_check_time INTEGER,
+          created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+          updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+          PRIMARY KEY (service_name, port)
+        )
+      `;
+
       // 首先创建 proxy_services 表
       this.db.run(createProxyServicesTable, (err) => {
         if (err) {
@@ -195,8 +211,19 @@ class Database {
                           console.error('创建service_tags表失败:', serviceTagsErr);
                           reject(serviceTagsErr);
                         } else {
-                          console.log('数据库表初始化完成');
-                          resolve();
+                          // 创建service_health_status表
+                          this.db.run(createServiceHealthStatusTable, (healthStatusErr) => {
+                            if (healthStatusErr) {
+                              console.error('创建service_health_status表失败:', healthStatusErr);
+                              reject(healthStatusErr);
+                            } else {
+                              console.log('数据库表初始化完成');
+                              // 初始化默认数据
+                              this.initializeDefaultData().then(() => {
+                                resolve();
+                              }).catch(reject);
+                            }
+                          });
                         }
                       });
                     }
@@ -208,6 +235,211 @@ class Database {
         });
       });
     });
+  }
+
+  // 初始化默认数据
+  async initializeDefaultData() {
+    console.log('开始初始化默认数据...');
+    
+    try {
+      // 1. 初始化默认标签
+      await this.initializeDefaultTags();
+      
+      // 2. 初始化端口范围配置（如果不存在）
+      await this.initializePortRangeIfNeeded();
+      
+      // 3. 初始化健康检查配置
+      await this.initializeHealthCheckConfig();
+      
+      console.log('✅ 默认数据初始化完成');
+    } catch (error) {
+      console.error('❌ 默认数据初始化失败:', error);
+      throw error;
+    }
+  }
+
+  // 初始化默认标签
+  async initializeDefaultTags() {
+    return new Promise((resolve, reject) => {
+      // 先检查是否已有标签
+      this.db.get('SELECT COUNT(*) as count FROM tags', (err, row) => {
+        if (err) {
+          reject(err);
+          return;
+        }
+        
+        // 如果已有标签，跳过初始化
+        if (row.count > 0) {
+          console.log('标签表已有数据，跳过默认标签初始化');
+          resolve();
+          return;
+        }
+        
+        // 定义默认标签
+        const defaultTags = [
+          {
+            id: this.generateTagId(),
+            name: '生产环境',
+            color: '#f56c6c',
+            type: 'environment',
+            description: '生产环境服务'
+          },
+          {
+            id: this.generateTagId(),
+            name: '测试环境',
+            color: '#e6a23c',
+            type: 'environment',
+            description: '测试环境服务'
+          },
+          {
+            id: this.generateTagId(),
+            name: '开发环境',
+            color: '#67c23a',
+            type: 'environment',
+            description: '开发环境服务'
+          },
+          {
+            id: this.generateTagId(),
+            name: '微服务',
+            color: '#409eff',
+            type: 'architecture',
+            description: '微服务架构'
+          },
+          {
+            id: this.generateTagId(),
+            name: '数据库',
+            color: '#909399',
+            type: 'category',
+            description: '数据库相关服务'
+          },
+          {
+            id: this.generateTagId(),
+            name: 'API网关',
+            color: '#606266',
+            type: 'category',
+            description: 'API网关服务'
+          }
+        ];
+        
+        // 插入默认标签
+        const insertPromises = defaultTags.map(tag => {
+          return new Promise((tagResolve, tagReject) => {
+            const sql = `
+              INSERT INTO tags (id, name, color, type, description)
+              VALUES (?, ?, ?, ?, ?)
+            `;
+            this.db.run(sql, [tag.id, tag.name, tag.color, tag.type, tag.description], (tagErr) => {
+              if (tagErr) {
+                tagReject(tagErr);
+              } else {
+                tagResolve();
+              }
+            });
+          });
+        });
+        
+        Promise.all(insertPromises)
+          .then(() => {
+            console.log(`✅ 已初始化 ${defaultTags.length} 个默认标签`);
+            resolve();
+          })
+          .catch(reject);
+      });
+    });
+  }
+
+  // 初始化端口范围配置（如果不存在）
+  async initializePortRangeIfNeeded() {
+    return new Promise((resolve, reject) => {
+      this.db.get('SELECT config_value FROM system_config WHERE config_key = ?', ['port_range'], (err, row) => {
+        if (err) {
+          reject(err);
+          return;
+        }
+        
+        // 如果已有端口范围配置，跳过
+        if (row) {
+          console.log('端口范围配置已存在，跳过初始化');
+          resolve();
+          return;
+        }
+        
+        // 设置默认端口范围配置
+        const defaultPortRange = {
+          startPort: 4000,
+          endPort: 4100,
+          totalPorts: 101,
+          description: '默认代理服务端口范围',
+          createdAt: new Date().toISOString()
+        };
+        
+        const sql = `
+          INSERT INTO system_config (config_key, config_value)
+          VALUES (?, ?)
+        `;
+        
+        this.db.run(sql, ['port_range', JSON.stringify(defaultPortRange)], (configErr) => {
+          if (configErr) {
+            reject(configErr);
+          } else {
+            console.log('✅ 已初始化默认端口范围配置 (4000-4100)');
+            resolve();
+          }
+        });
+      });
+    });
+  }
+
+  // 初始化健康检查配置
+  async initializeHealthCheckConfig() {
+    return new Promise((resolve, reject) => {
+      this.db.get('SELECT config_value FROM system_config WHERE config_key = ?', ['health_check_config'], (err, row) => {
+        if (err) {
+          reject(err);
+          return;
+        }
+        
+        // 如果已有健康检查配置，跳过
+        if (row) {
+          console.log('健康检查配置已存在，跳过初始化');
+          resolve();
+          return;
+        }
+        
+        // 设置默认健康检查配置
+        const defaultHealthConfig = {
+          consecutiveFailuresThreshold: 3,
+          failureRateThreshold: 0.7,
+          detectionWindowSize: 10,
+          autoRestartDelay: 60,
+          maxRestartAttempts: 3,
+          healthCheckInterval: 10000,
+          minSuccessInterval: 300,
+          enabled: true,
+          description: '默认服务健康检查配置',
+          createdAt: new Date().toISOString()
+        };
+        
+        const sql = `
+          INSERT INTO system_config (config_key, config_value)
+          VALUES (?, ?)
+        `;
+        
+        this.db.run(sql, ['health_check_config', JSON.stringify(defaultHealthConfig)], (configErr) => {
+          if (configErr) {
+            reject(configErr);
+          } else {
+            console.log('✅ 已初始化默认健康检查配置');
+            resolve();
+          }
+        });
+      });
+    });
+  }
+
+  // 生成标签ID的辅助方法
+  generateTagId() {
+    return 'tag_' + Date.now() + '_' + Math.random().toString(36).substr(2, 9);
   }
 
   // 获取所有代理服务
@@ -1298,6 +1530,131 @@ class Database {
         } else {
           console.log(`服务 ${serviceName} 没有找到调试接口记录`);
           resolve();
+        }
+      });
+    });
+  }
+
+  // ===== 服务健康状态管理 =====
+
+  // 获取服务健康状态
+  async getServiceHealthStatus(serviceName, port) {
+    return new Promise((resolve, reject) => {
+      const sql = 'SELECT * FROM service_health_status WHERE service_name = ? AND port = ?';
+      
+      this.db.get(sql, [serviceName, port], (err, row) => {
+        if (err) {
+          reject(err);
+        } else if (!row) {
+          resolve(null);
+        } else {
+          resolve({
+            serviceName: row.service_name,
+            port: row.port,
+            consecutiveFailures: row.consecutive_failures,
+            lastSuccessTime: row.last_success_time,
+            restartAttempts: row.restart_attempts,
+            status: row.status,
+            failureRate: row.failure_rate,
+            lastCheckTime: row.last_check_time,
+            createdAt: row.created_at,
+            updatedAt: row.updated_at
+          });
+        }
+      });
+    });
+  }
+
+  // 更新服务健康状态
+  async updateServiceHealthStatus(serviceName, port, statusData) {
+    return new Promise((resolve, reject) => {
+      const {
+        consecutiveFailures,
+        lastSuccessTime,
+        restartAttempts,
+        status,
+        failureRate,
+        lastCheckTime
+      } = statusData;
+
+      const sql = `
+        INSERT OR REPLACE INTO service_health_status (
+          service_name, port, consecutive_failures, last_success_time,
+          restart_attempts, status, failure_rate, last_check_time, updated_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
+      `;
+
+      this.db.run(sql, [
+        serviceName, port, consecutiveFailures || 0, lastSuccessTime,
+        restartAttempts || 0, status || 'healthy', failureRate || 0.0, 
+        lastCheckTime || Math.floor(Date.now() / 1000)
+      ], function (err) {
+        if (err) {
+          reject(err);
+        } else {
+          resolve({ changes: this.changes });
+        }
+      });
+    });
+  }
+
+  // 获取所有健康状态
+  async getAllServiceHealthStatus() {
+    return new Promise((resolve, reject) => {
+      const sql = 'SELECT * FROM service_health_status ORDER BY service_name, port';
+      
+      this.db.all(sql, (err, rows) => {
+        if (err) {
+          reject(err);
+        } else {
+          const healthStatuses = rows.map(row => ({
+            serviceName: row.service_name,
+            port: row.port,
+            consecutiveFailures: row.consecutive_failures,
+            lastSuccessTime: row.last_success_time,
+            restartAttempts: row.restart_attempts,
+            status: row.status,
+            failureRate: row.failure_rate,
+            lastCheckTime: row.last_check_time,
+            createdAt: row.created_at,
+            updatedAt: row.updated_at
+          }));
+          resolve(healthStatuses);
+        }
+      });
+    });
+  }
+
+  // 删除服务健康状态记录
+  async deleteServiceHealthStatus(serviceName, port) {
+    return new Promise((resolve, reject) => {
+      const sql = 'DELETE FROM service_health_status WHERE service_name = ? AND port = ?';
+      
+      this.db.run(sql, [serviceName, port], function (err) {
+        if (err) {
+          reject(err);
+        } else {
+          resolve({ changes: this.changes });
+        }
+      });
+    });
+  }
+
+  // 清理旧的健康状态记录（清理不再运行的服务）
+  async cleanupOldHealthStatus() {
+    return new Promise((resolve, reject) => {
+      const sql = `
+        DELETE FROM service_health_status 
+        WHERE (service_name, port) NOT IN (
+          SELECT service_name, port FROM proxy_services WHERE is_running = 1
+        )
+      `;
+      
+      this.db.run(sql, function (err) {
+        if (err) {
+          reject(err);
+        } else {
+          resolve({ changes: this.changes });
         }
       });
     });

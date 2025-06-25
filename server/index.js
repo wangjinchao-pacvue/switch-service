@@ -23,7 +23,7 @@ let config = {
     host: 'host.docker.internal', // 容器环境下访问宿主机服务
     port: 8761,
     servicePath: '/eureka/apps',
-    heartbeatInterval: 30 // 心跳间隔（秒）
+    heartbeatInterval: 10 // 心跳间隔（秒）
   }
 };
 
@@ -45,6 +45,22 @@ const MAX_SYSTEM_LOGS = 500;
 // 请求详情存储（按UUID索引）
 const requestDetailsMap = new Map();
 const MAX_REQUEST_DETAILS = 200; // 最大系统日志数量
+
+// 服务健康检查和自动恢复相关变量
+let isHealthCheckActive = false; // 健康检查是否活跃
+let serviceHealthCheckTimer = null; // 健康检查定时器
+let autoRecoveryInProgress = new Set(); // 正在恢复的服务集合
+
+// 健康检查配置
+const HEARTBEAT_HEALTH_CONFIG = {
+  CONSECUTIVE_FAILURES_THRESHOLD: 3,    // 连续失败阈值
+  FAILURE_RATE_THRESHOLD: 0.7,          // 失败率阈值 (70%)
+  DETECTION_WINDOW_SIZE: 10,             // 检测窗口大小（最近10次心跳）
+  MAX_RESTART_ATTEMPTS: 3,               // 最大重启尝试次数
+  AUTO_RESTART_DELAY: 5,                 // 自动重启延迟基数（秒）
+  HEALTH_CHECK_INTERVAL: 10000,          // 健康检查间隔（10秒）
+  MIN_SUCCESS_INTERVAL: 300              // 最小成功间隔（5分钟）
+};
 
 // 日志分类定义
 const LOG_CATEGORIES = {
@@ -197,6 +213,9 @@ database.init().then(async () => {
   
   // 启动Eureka健康检查
   startEurekaHealthCheck();
+  
+  // 启动服务健康检查
+  startServiceHealthCheck();
 }).catch(err => {
   console.error('数据库初始化失败:', err);
   process.exit(1);
@@ -2812,12 +2831,12 @@ function startEurekaHeartbeat(serviceName, port) {
     try {
       await sendEurekaHeartbeat(serviceName, port);
     } catch (error) {
-      console.error(`Heartbeat failed for ${serviceName}:`, error.message);
+      console.error(`⚠️ 服务 ${serviceName}:${port} 心跳定时器执行失败:`, error.message);
     }
   }, config.eureka.heartbeatInterval * 1000); // 配置的心跳间隔
   
   heartbeatTimers.set(heartbeatKey, heartbeatInterval);
-  console.log(`Started Eureka heartbeat for ${serviceName} on port ${port}`);
+  console.log(`🔄 已启动服务 ${serviceName}:${port} 的Eureka心跳定时器`);
 }
 
 // 停止Eureka心跳
@@ -2827,7 +2846,7 @@ async function stopEurekaHeartbeat(serviceName, port) {
   if (heartbeatTimers.has(heartbeatKey)) {
     clearInterval(heartbeatTimers.get(heartbeatKey));
     heartbeatTimers.delete(heartbeatKey);
-    console.log(`Stopped Eureka heartbeat for ${serviceName} on port ${port}`);
+    console.log(`🛑 已停止服务 ${serviceName}:${port} 的Eureka心跳定时器`);
   }
   
   // 清理心跳错误记录
@@ -2835,8 +2854,11 @@ async function stopEurekaHeartbeat(serviceName, port) {
     heartbeatErrors.delete(heartbeatKey);
   }
   
-  // 清理心跳历史数据
-  await clearHeartbeatHistory(serviceName, port);
+      // 清理心跳历史数据
+    await clearHeartbeatHistory(serviceName, port);
+    
+    // 清理健康状态记录
+    await database.deleteServiceHealthStatus(serviceName, port);
 }
 
 // 发送Eureka心跳
@@ -2861,7 +2883,7 @@ async function sendEurekaHeartbeat(serviceName, port) {
     // 心跳成功，清除错误记录
     if (heartbeatErrors.has(serverKey)) {
       heartbeatErrors.delete(serverKey);
-      console.log(`Heartbeat recovered for ${serviceName} on port ${port}`);
+      console.log(`✅ 服务 ${serviceName}:${port} 心跳已恢复`);
       
       // 广播状态更新
       broadcast({
@@ -2871,7 +2893,12 @@ async function sendEurekaHeartbeat(serviceName, port) {
         message: `服务 ${serviceName} 心跳已恢复`
       });
     } else {
-      // 静默心跳发送，不记录日志
+      // 正常心跳续约成功，记录日志（但降低频率避免刷屏）
+      // 每分钟只记录一次正常心跳（6次心跳记录1次，因为心跳间隔是10秒）
+      const heartbeatCount = (Date.now() / (10 * 1000)) % 6; // 每60秒循环一次
+      if (Math.floor(heartbeatCount) === 0) {
+        console.log(`💓 服务 ${serviceName}:${port} 心跳续约正常`);
+      }
     }
   } catch (error) {
     // 记录失败的心跳
@@ -2888,7 +2915,7 @@ async function sendEurekaHeartbeat(serviceName, port) {
     const wasHealthy = !heartbeatErrors.has(serverKey);
     heartbeatErrors.set(serverKey, errorInfo);
     
-    console.error(`Failed to send heartbeat for ${serviceName}: ${error.message}`);
+    console.error(`❌ 服务 ${serviceName}:${port} 心跳失败: ${error.message}`);
     
     // 如果是首次出现错误，广播状态变更
     if (wasHealthy) {
@@ -2917,6 +2944,9 @@ function startDataCleanupTask() {
       
       // 清理旧的代理日志（保留最近10000条）
       await database.cleanupOldProxyLogs(10000);
+      
+      // 清理不再运行的服务的健康状态记录
+      await database.cleanupOldHealthStatus();
       
       console.log('✅ 旧数据清理完成');
     } catch (error) {
@@ -3316,6 +3346,7 @@ async function gracefulShutdown(signal) {
     // 2. 停止状态同步和健康检查
     stopStatusSync();
     stopEurekaHealthCheck();
+    stopServiceHealthCheck();
     console.log('状态同步和健康检查已停止');
     
     // 3. 清理所有心跳定时器
@@ -3791,5 +3822,334 @@ app.post('/api/debug/proxy-request', async (req, res) => {
     })
   }
 })
+
+// ===== 服务健康检查和自动恢复系统 =====
+
+// 启动服务健康检查
+function startServiceHealthCheck() {
+  if (isHealthCheckActive) {
+    return;
+  }
+  
+  console.log('🔍 启动服务健康检查监控...');
+  isHealthCheckActive = true;
+  
+  // 每10秒检查一次服务健康状态
+  serviceHealthCheckTimer = setInterval(async () => {
+    try {
+      await performHealthCheck();
+    } catch (error) {
+      console.error('健康检查失败:', error);
+    }
+  }, HEARTBEAT_HEALTH_CONFIG.HEALTH_CHECK_INTERVAL);
+}
+
+// 停止服务健康检查
+function stopServiceHealthCheck() {
+  if (serviceHealthCheckTimer) {
+    clearInterval(serviceHealthCheckTimer);
+    serviceHealthCheckTimer = null;
+    isHealthCheckActive = false;
+    console.log('🛑 服务健康检查已停止');
+  }
+}
+
+// 执行健康检查
+async function performHealthCheck() {
+  try {
+    // 获取所有运行中的服务
+    const runningServices = await database.getAllProxyServices();
+    const activeServices = runningServices.filter(service => service.isRunning);
+    
+    if (activeServices.length === 0) {
+      return;
+    }
+    
+    // 检查每个服务的健康状态
+    for (const service of activeServices) {
+      const healthStatus = await checkServiceHealth(service.serviceName, service.port);
+      
+      if (healthStatus.needsRecovery && !autoRecoveryInProgress.has(`${service.serviceName}:${service.port}`)) {
+        console.warn(`🚨 检测到服务异常: ${service.serviceName}:${service.port} - ${healthStatus.reason}`);
+        
+        // 启动自动恢复
+        await autoRecoverService(service, healthStatus);
+      }
+    }
+    
+  } catch (error) {
+    console.error('执行健康检查时出错:', error);
+  }
+}
+
+// 检查单个服务的健康状态
+async function checkServiceHealth(serviceName, port) {
+  try {
+    const currentTime = Math.floor(Date.now() / 1000);
+    
+    // 获取最近的心跳历史
+    const recentHeartbeats = await database.getHeartbeatHistory(serviceName, port, HEARTBEAT_HEALTH_CONFIG.DETECTION_WINDOW_SIZE);
+    
+    if (recentHeartbeats.length === 0) {
+      return {
+        status: 'no_data',
+        needsRecovery: false,
+        reason: '没有心跳数据'
+      };
+    }
+    
+    // 计算健康指标
+    const failedHeartbeats = recentHeartbeats.filter(h => h.status !== 'success');
+    const failureRate = failedHeartbeats.length / recentHeartbeats.length;
+    
+    // 计算连续失败次数
+    let consecutiveFailures = 0;
+    for (const heartbeat of recentHeartbeats) {
+      if (heartbeat.status !== 'success') {
+        consecutiveFailures++;
+      } else {
+        break;
+      }
+    }
+    
+    // 检查最后一次成功心跳的时间
+    const lastSuccessHeartbeat = recentHeartbeats.find(h => h.status === 'success');
+    const lastSuccessTime = lastSuccessHeartbeat ? lastSuccessHeartbeat.timestamp : null;
+    const timeSinceLastSuccess = lastSuccessTime ? (currentTime - lastSuccessTime) : null;
+    
+    // 获取现有的健康状态记录
+    let existingHealthStatus = await database.getServiceHealthStatus(serviceName, port);
+    
+    // 判断是否需要恢复
+    let needsRecovery = false;
+    let status = 'healthy';
+    let reason = '';
+    
+    if (consecutiveFailures >= HEARTBEAT_HEALTH_CONFIG.CONSECUTIVE_FAILURES_THRESHOLD) {
+      needsRecovery = true;
+      status = 'critical';
+      reason = `连续${consecutiveFailures}次心跳失败`;
+    } else if (failureRate >= HEARTBEAT_HEALTH_CONFIG.FAILURE_RATE_THRESHOLD) {
+      needsRecovery = true;
+      status = 'critical';
+      reason = `心跳失败率${(failureRate * 100).toFixed(1)}%超过阈值`;
+    } else if (timeSinceLastSuccess && timeSinceLastSuccess > HEARTBEAT_HEALTH_CONFIG.MIN_SUCCESS_INTERVAL) {
+      needsRecovery = true;
+      status = 'critical';
+      reason = `超过${Math.floor(timeSinceLastSuccess / 60)}分钟无成功心跳`;
+    } else if (consecutiveFailures >= 2) {
+      status = 'warning';
+      reason = `连续${consecutiveFailures}次心跳失败（接近阈值）`;
+    } else if (failureRate >= 0.5) {
+      status = 'warning';
+      reason = `心跳失败率${(failureRate * 100).toFixed(1)}%偏高`;
+    }
+    
+    // 更新健康状态到数据库
+    const healthStatusData = {
+      consecutiveFailures: consecutiveFailures,
+      lastSuccessTime: lastSuccessTime,
+      restartAttempts: existingHealthStatus?.restartAttempts || 0,
+      status: status,
+      failureRate: failureRate,
+      lastCheckTime: currentTime
+    };
+    
+    await database.updateServiceHealthStatus(serviceName, port, healthStatusData);
+    
+    // 广播健康状态更新
+    if (status !== 'healthy') {
+      broadcast({
+        type: 'service_health_warning',
+        serviceName,
+        port,
+        status,
+        reason,
+        consecutiveFailures,
+        failureRate: (failureRate * 100).toFixed(1),
+        timeSinceLastSuccess: timeSinceLastSuccess,
+        timestamp: new Date().toISOString()
+      });
+    }
+    
+    return {
+      status,
+      needsRecovery,
+      reason,
+      consecutiveFailures,
+      failureRate,
+      timeSinceLastSuccess,
+      restartAttempts: healthStatusData.restartAttempts
+    };
+    
+  } catch (error) {
+    console.error(`检查服务健康状态失败 ${serviceName}:${port}:`, error);
+    return {
+      status: 'error',
+      needsRecovery: false,
+      reason: '健康检查出错'
+    };
+  }
+}
+
+// 自动恢复服务
+async function autoRecoverService(service, healthStatus) {
+  const serviceKey = `${service.serviceName}:${service.port}`;
+  
+  // 检查是否超过最大重启次数
+  if (healthStatus.restartAttempts >= HEARTBEAT_HEALTH_CONFIG.MAX_RESTART_ATTEMPTS) {
+    console.error(`❌ 服务 ${serviceKey} 已达到最大重启次数(${HEARTBEAT_HEALTH_CONFIG.MAX_RESTART_ATTEMPTS})，停止自动恢复`);
+    
+    // 广播最终失败通知
+    broadcast({
+      type: 'service_recovery_failed',
+      serviceName: service.serviceName,
+      port: service.port,
+      reason: `已达到最大重启次数(${HEARTBEAT_HEALTH_CONFIG.MAX_RESTART_ATTEMPTS})`,
+      finalStatus: 'failed',
+      timestamp: new Date().toISOString()
+    });
+    
+    return;
+  }
+  
+  // 标记为正在恢复
+  autoRecoveryInProgress.add(serviceKey);
+  
+  try {
+    console.log(`🔄 开始自动恢复服务: ${serviceKey} - 尝试次数: ${healthStatus.restartAttempts + 1}/${HEARTBEAT_HEALTH_CONFIG.MAX_RESTART_ATTEMPTS}`);
+    
+    // 广播恢复开始通知
+    broadcast({
+      type: 'service_recovery_started',
+      serviceName: service.serviceName,
+      port: service.port,
+      attempt: healthStatus.restartAttempts + 1,
+      maxAttempts: HEARTBEAT_HEALTH_CONFIG.MAX_RESTART_ATTEMPTS,
+      reason: healthStatus.reason,
+      timestamp: new Date().toISOString()
+    });
+    
+    // 等待一段时间再重启（渐进式延迟，控制在60秒内）
+    const delay = HEARTBEAT_HEALTH_CONFIG.AUTO_RESTART_DELAY + (healthStatus.restartAttempts * 10);
+    console.log(`⏳ 等待 ${delay} 秒后重启服务...`);
+    await new Promise(resolve => setTimeout(resolve, delay * 1000));
+    
+    // 步骤1: 先停止服务
+    console.log(`🛑 停止服务: ${serviceKey}`);
+    await stopProxyService(service);
+    
+    // 等待一秒确保完全停止
+    await new Promise(resolve => setTimeout(resolve, 1000));
+    
+    // 步骤2: 重新启动服务
+    console.log(`🚀 重新启动服务: ${serviceKey}`);
+    await startProxyService(service, { skipEurekaCheck: true });
+    
+    // 更新重启次数
+    const newRestartAttempts = healthStatus.restartAttempts + 1;
+    await database.updateServiceHealthStatus(service.serviceName, service.port, {
+      ...healthStatus,
+      restartAttempts: newRestartAttempts,
+      status: 'recovering',
+      lastCheckTime: Math.floor(Date.now() / 1000)
+    });
+    
+    console.log(`✅ 服务 ${serviceKey} 自动恢复完成`);
+    
+    // 广播恢复成功通知
+    broadcast({
+      type: 'service_recovery_success',
+      serviceName: service.serviceName,
+      port: service.port,
+      attempt: newRestartAttempts,
+      message: `服务 ${serviceKey} 自动恢复成功`,
+      timestamp: new Date().toISOString()
+    });
+    
+  } catch (error) {
+    console.error(`❌ 自动恢复服务失败 ${serviceKey}:`, error);
+    
+    // 更新重启次数（即使失败也要记录）
+    const newRestartAttempts = healthStatus.restartAttempts + 1;
+    await database.updateServiceHealthStatus(service.serviceName, service.port, {
+      ...healthStatus,
+      restartAttempts: newRestartAttempts,
+      status: 'failed',
+      lastCheckTime: Math.floor(Date.now() / 1000)
+    });
+    
+    // 广播恢复失败通知
+    broadcast({
+      type: 'service_recovery_error',
+      serviceName: service.serviceName,
+      port: service.port,
+      attempt: newRestartAttempts,
+      error: error.message,
+      message: `服务 ${serviceKey} 自动恢复失败: ${error.message}`,
+      timestamp: new Date().toISOString()
+    });
+    
+  } finally {
+    // 移除恢复标记
+    autoRecoveryInProgress.delete(serviceKey);
+  }
+}
+
+// 获取所有服务健康状态（API接口）
+app.get('/api/health/status', async (req, res) => {
+  try {
+    const healthStatuses = await database.getAllServiceHealthStatus();
+    res.json({
+      success: true,
+      healthStatuses,
+      isHealthCheckActive,
+      config: HEARTBEAT_HEALTH_CONFIG
+    });
+  } catch (error) {
+    console.error('获取健康状态失败:', error);
+    res.status(500).json({
+      success: false,
+      error: error.message
+    });
+  }
+});
+
+// 手动触发健康检查（API接口）
+app.post('/api/health/check', async (req, res) => {
+  try {
+    await performHealthCheck();
+    res.json({
+      success: true,
+      message: '健康检查已执行'
+    });
+  } catch (error) {
+    console.error('手动健康检查失败:', error);
+    res.status(500).json({
+      success: false,
+      error: error.message
+    });
+  }
+});
+
+// 重置服务健康状态（API接口）
+app.post('/api/health/reset/:serviceName/:port', async (req, res) => {
+  try {
+    const { serviceName, port } = req.params;
+    await database.deleteServiceHealthStatus(serviceName, parseInt(port));
+    
+    console.log(`重置服务健康状态: ${serviceName}:${port}`);
+    res.json({
+      success: true,
+      message: `服务 ${serviceName}:${port} 健康状态已重置`
+    });
+  } catch (error) {
+    console.error('重置健康状态失败:', error);
+    res.status(500).json({
+      success: false,
+      error: error.message
+    });
+  }
+});
 
 module.exports = app; 

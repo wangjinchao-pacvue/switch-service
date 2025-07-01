@@ -3535,7 +3535,8 @@ app.post('/api/config/local-ip', async (req, res) => {
     
     // 简单的IP格式验证
     const ipRegex = /^(\d{1,3}\.){3}\d{1,3}$/;
-    if (!ipRegex.test(localIP)) {
+    const isLocalhost = localIP === 'localhost';
+    if (!ipRegex.test(localIP) && !isLocalhost) {
       return res.status(400).json({ 
         success: false, 
         error: '请提供有效的IP地址格式' 

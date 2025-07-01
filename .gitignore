@@ -72,3 +72,5 @@ logs
 # Database
 server/data/*.db
 !server/data/.gitkeep 
+*.db
+*.db-journal
